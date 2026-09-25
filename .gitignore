@@ -1,0 +1,8 @@
+# Sigma's original firmware (download from Sigma)
+/dp2x102.bin
+# Generated disassembly / call graph (rebuild with tools/disasm.sh)
+work/
+__pycache__/
+# Untested variant (build with --also-playback)
+build/DP2X102_all.BIN
+.DS_Store
