@@ -57,18 +57,27 @@ DP2x firmware **version 1.02**.
 ## What if I want the lens to retract?
 
 Sometimes you'll want the lens in, for example before putting the camera in a bag
-or fitting the lens cap:
+or fitting the lens cap. There are two ways to do it.
+
+**Option 1: the setup dial (quickest)**
+
+1. Turn the mode dial to **SETUP**.
+2. Switch the camera on. The **lens retracts**.
+3. You can now turn the camera off. The lens stays in.
+
+**Option 2: wait in playback**
 
 1. Switch the camera to **playback** mode (viewing your pictures).
 2. Leave it alone. Don't press any buttons.
 3. When the playback timeout is reached, the **lens retracts by itself**.
 4. You can now turn the camera off. The lens stays in.
 
-The next time you switch on in shooting mode, the lens comes out again as normal.
-
 **Tip:** if the camera switches itself off before the lens goes in, set **auto power
 off** to a longer time, or turn it off, in the camera's menu. Otherwise the camera
 turns off with the lens still out.
+
+Either way, the next time you switch on in shooting mode, the lens comes out again
+as normal.
 
 ## How to go back to the original
 
