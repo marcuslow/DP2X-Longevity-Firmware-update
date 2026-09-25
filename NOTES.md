@@ -140,3 +140,63 @@ Not yet checked:
 | `0x402c40` | `LENS_START Battery_%d : %d` (battery check `0x270f94`) |
 | `0x41a3c8` | `Confirm main firm checksum` (`0x2794d2`) |
 | `0x41a8fc` | `current firmware verion` (update file search `0x278c04`) |
+
+## 9. Exploration notes (branch `marcusonly`, 2026-09-26)
+
+Static analysis only. Nothing below is patched or tested unless stated.
+
+### 9.1 Shutter count (parked)
+- Live counter: RAM `0x80101ff4` (u32). `0x214a10` increments it after each still is saved ("Still Capture file save end").
+- Persistent copy: last word of the settings sector at flash `0x800000` (magic `"C72A"`, `0x30c` bytes, so the count is at `0x800308`). `0x212028` copies it to RAM `0x80101cec` at boot; power-off (`0x221518` -> `0x214460`) writes it back. The updater reloads the camera's existing sector during flashing ("Current file load ... Camfile overwrite"), so the count should survive a firmware update. Not verified on the camera.
+- Stock firmware only prints it on the debug UART (`0x27e810`, "Total Shutter :%d"). Service USB commands `0x38`/`0x3b` set/get it through the USB buffer `0x80112053`.
+- Proposed display: the setup-menu version line at `0x2c721e` does `memcpy(buf, 0x808000 /*serial*/, 4)` then `sprintf("Ver.%01d.%02d [SN:%08d]")`. Changing the source address at `0x2c7224` to `0x80101ff4` and relabelling the format strings `0x45c7fc`/`0x45c7d8` shows the count in place of the serial number. The text buffer is 32 bytes, too small to show both.
+
+### 9.2 Focus homing at start-up
+- The focus stepper is open-loop; its only reference is the home switch (`0x5a6` bit1). Position (`0x6a019a78`) and the initialised flag (`0x6a019a74`) are RAM, so they're lost at power-off, and every boot re-homes via `0x38a494` -> `0x38a540` -> `0x38a6d8`:
+  - if on the switch, back off 20 steps; otherwise approach home by up to 364 (`0x16c`) steps;
+  - creep 1 step per 1 ms until the switch triggers;
+  - position = 364.
+- Stock power-off also homes the focus (`barrel_ctrl(2)` -> `0x38a570`) so the barrel can retract with the focus group in a known spot. Our lens patch skips that, so boot usually takes the longer approach path. Harmless, and drift is corrected at every boot.
+
+### 9.3 Contrast AF engine
+- Half-press handler `0x238ad6`: "AF start" at `0x23900c`, "AF done" at `0x23912c`. Result flag `0x6a0189b4` (1 = focus OK, green box).
+- Start `0x28425a`: the window is set by `0x38adb4` (limits `0x6a019a84`/`0x6a019a86`/`0x6a019a88`; the far end depends on `0x30837c`, probably macro). If the scene is bright (`0x80150fb0` >= `0x50000`) and the lens is inside the window, scan from the current position; otherwise jump to the nearer end (`0x284182`). Direction is chosen in `0x2841de`.
+- Per frame: `0x38afb0` polls the AF block (`0x40000006` bit `0x20`, 1 ms sleeps), reads three contrast values (`0x40000000` + `0xb4`/`0x88`/`0x9c`), and stores them (`0x2843a2`). The history lives at `0x80151474` and the frame counter at `0x80150fb8` (limits 5/10/100).
+- Coarse step is a fixed +/-4 motor steps: `0x38aee0` (`0xfc` at `0x38aef2`, `0x04` at `0x38aefe`). Peak detection uses a +/-4 hysteresis around the peak (`0x8015153e`).
+- Refine `0x283e2c`: move to peak +/-16 (clamped to `0x8015153c`) and re-scan through the peak from one side (backlash-consistent).
+- Sensor mode for AF (`0x244784`): AFE clock mode 4 = **40 MHz, already the fast clock** (`0x245934`: modes 1-2 = 20 MHz, 3-6 = 40 MHz), so there's no clock-speed gain available. The per-brightness timing table at `0x3be3a4` (5 x 12-byte entries, index `0x6a018da6` chosen by brightness thresholds `0x90000`..`0x50000`) sets sensor regs `0x66`/`0x67` and a line/frame-length value (`0xf02` bright -> `0x15c2` dark). So AF frames get slower in dim light.
+
+### 9.4 Magnify during half-press (stock, trigger unknown; parked for camera test)
+- While half-press is held after AF (loop `0x239178`, normal AF mode only), key bit `0x1000000` turns MF-spot magnification on (`0x2397f8` -> `Iif_Mf_Spot_On`, flag `0x6a0189c0`=1). Key bit `0x4000000` turns it off. Releasing S1 or shooting always turns it off (`0x2392d8`).
+- The key word is `0x6a018238`, built from GPIO `0x40`/`0x42` plus sub-MCU data, so the physical button is unknown. Test by holding half-press after the green box and trying each control, starting with the MF wheel.
+- Idea: auto-enable on entry when `0x6a0189b4`==1 (hook the entry branch at `0x23916a`). Needs a code cave; free space not yet confirmed.
+
+### 9.5 Free flash space for injected code
+- Empty-looking regions exist, but none is proven unused:
+  - `0x3f2d7e`-`0x3f754a` (~18 KiB of zeros, no code refs) sits inside a sparse data blob whose density tapers off from `0x3f0800`. It's probably the blank middle of a table or bitmap, so the zeros may be meaningful.
+  - `0x5b6000`-`0x800000` holds addresses the code uses (`0x700010`, `0x7d0000`, ...), possibly runtime storage.
+- **Chosen cave: factory AFE-gain tuning routine `0x27eb4e`-`0x27f405` (2232 bytes).** All references into it are its own internal jump targets, plus the call sites `0x27f4ca`/`0x27f5c6` inside `0x27f6b2` ("AFE Gain Adjustment Start"). The only entry chain is the service USB command dispatcher (`0x24e054` -> `0x252224` -> `0x27df8c` -> `0x27cc86` -> `0x27f6b2`). No data pointers into it anywhere in the image.
+  - To use it: also neutralise the entry (make `0x27f6b2` return early), so a service tool can't jump into the new code.
+  - Cost: Sigma's factory AFE gain adjustment over USB won't work with this firmware. Flashing stock restores it.
+
+### 9.6 AF refine pass, in detail
+- State machine `0x284114` on `0x80150fac`: 1 = coarse scan (`0x283842`), 2 = refine (`0x283776`), 3 = `0x283822`. Context struct at `0x80150fa4` (0x5a4 bytes):
+  - +0 coarse phase, +4 refine result (`fa8`), +0x14 frame count n, +0x18 coarse best idx, +0x1c refine best idx
+  - per-frame arrays: `0x801512e4` A, `0x80151154` B, `0x80150fc4` C (u32 contrast), `0x80151474` -position (u16), up to 100 frames
+  - +0x598 coarse peak raw, +0x59a coarse peak, +0x59c/+0x59e refine peak raw/peak, +0x5a0 flag
+- Per frame, `0x2d928e` calls the AF library `0x30c21e` (plus the per-window `0x307da6`, up to 10 windows). It returns peak found / best index / an **interpolated** peak position; `0x30c8c4` does a linear interpolation via divide `0x373e9e`. So stock already interpolates between samples.
+- `0x283f6a`: peak = raw - (pos[best] - pos[best-1]), a one-frame latency correction.
+- Coarse decision `0x283afc`: no contrast if n>=10 and B[best] < 30000. Peak passed when B[n-1] < B[best] - B[best]/8 and C also lower (-> phase 5), or when 2+ frames have passed since best (-> phase 4).
+- Refine setup `0x283e2c`: target = peak -/+ 16 (`add2 -16` at `0x283e66`, `ldi:8 0x10` at `0x283eb0`), clamped; move there (`0x38ae4c`); clear history (`0x283714`); set direction.
+- Refine loop `0x283776`: steps +/-4 per frame; always at least 5 frames (`cmp 5` at `0x2837ac`), then stops when `fa8`==1 or at n>10 / window edge / 100. Agreement check `0x283a82`: success if |coarse peak - refine peak| <= 4 steps.
+- So a refine costs one ~20-step move plus 5-10 frames. It re-scans from the opposite side (backlash) and **cross-checks the two peak estimates**. It isn't a finer-step scan: both passes use 4 steps.
+
+### 9.7 Test build `build/DP2X102_test.BIN` (not yet flashed)
+`python3 tools/patch_lens.py dp2x102.bin build/DP2X102_test.BIN --af-refine 8 --shutter-count`
+SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, checksum `0x149b66c4`.
+- Lens patch (default set), plus:
+- AF refine restarts 8 steps past the peak instead of 16 (`0x283e66` `a500`->`a580`, `0x283eb0` `c101`->`c081`). If the clamp to `0x8015153c` in `0x283e2c` always overrides the offset, this has no effect.
+- Version line shows `Shots:%d` from `0x80101ff4` instead of `[SN:%08d]`.
+- To test: AF time and accuracy against the flashed build, on close-up f/2.8, distant, and dim targets; and check the version screen shows a plausible count.
+- To roll back: flash `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed to `DP2X102.BIN`.
+- **2026-09-26: `DP2X102_test.BIN` flashed. Shutter count works:** the version screen shows `Shots:<n>`. AF refine-8 test in progress.
