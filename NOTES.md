@@ -200,3 +200,21 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - To test: AF time and accuracy against the flashed build, on close-up f/2.8, distant, and dim targets; and check the version screen shows a plausible count.
 - To roll back: flash `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed to `DP2X102.BIN`.
 - **2026-09-26: `DP2X102_test.BIN` flashed. Shutter count works:** the version screen shows `Shots:<n>`. AF refine-8 test in progress.
+
+## 10. Resume here (session ended 2026-09-26)
+
+**On the camera now:** `build/DP2X102_test.BIN` (lens patch + `--af-refine 8` + `--shutter-count`). Rollback: `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed `DP2X102.BIN` on the card root.
+
+**Status**
+- Lens patch: done, confirmed (section 7).
+- Shutter count on the version screen: done, confirmed (9.1, 9.7).
+- AF refine 16 -> 8: **testing in progress.** The user is comparing AF speed and sharpness (close-up f/2.8, distant, dim; about 5 tries each; slow-motion video for timing).
+
+**Next steps, depending on the AF result**
+1. Faster and still sharp: consider option C, skipping the refine pass (go straight to the interpolated coarse peak with a same-side approach). Needs injected code in the factory AFE-gain cave `0x27eb4e`-`0x27f405` (9.5), plus neutralising `0x27f6b2`.
+2. No difference: the clamp to `0x8015153c` in `0x283e2c` probably overrides the offset. Work out what the evaluator stores in `0x8015153c` (from `0x307da6`'s per-window output, local `r14-64` in `0x2d928e`).
+3. More misses or softer focus: revert to 16 (build without `--af-refine`).
+
+**Parked**
+- Magnify during half-press (9.4): the user will test which button (key bit `0x1000000`) triggers the stock magnify. Then optionally auto-enable when focus is green.
+- Rejected ideas: a faster AF clock (already 40 MHz), bigger coarse steps (the user trusts Sigma's tuning), a lower refine minimum of 5 frames (saves almost nothing).
