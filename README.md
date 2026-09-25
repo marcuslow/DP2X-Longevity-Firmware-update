@@ -1,70 +1,79 @@
 # DP2X Longevity Firmware update
 
+Modified firmware for the **Sigma DP2x** camera. The lens stays out when you turn
+the camera off, so the lens motor and gears don't have to push it in and out every
+time you use the camera.
+
 > [!WARNING]
-> **READ THIS BEFORE USING. NO WARRANTY. USE ENTIRELY AT YOUR OWN RISK.**
+> **PLEASE READ BEFORE USING. NO WARRANTY. USE ENTIRELY AT YOUR OWN RISK.**
 >
 > This is unofficial, modified firmware. It is **not made, endorsed, supported or
-> approved by SIGMA Corporation**. Flashing it can permanently damage your camera
-> ("brick" it), and may void your warranty and any right to manufacturer service.
+> approved by SIGMA Corporation**. Installing it can permanently damage your camera
+> ("brick" it), and may void your warranty and any right to repair service from SIGMA.
 >
 > **The authors and contributors are NOT responsible for any damage to your camera,
-> lens, memory card, data or anything else, or for any loss arising from its use.
+> lens, memory card, pictures or anything else, or for any loss from using it.
 > This includes a bricked camera, lens or mechanism failure, and lost images.**
-> By downloading, building or flashing this firmware, you accept full responsibility
-> for the result.
+> By downloading or installing this firmware, you accept full responsibility for the result.
 >
 > **Always follow SIGMA's official firmware update instructions and procedures for
-> the DP2x** (see SIGMA's DP2x firmware download and support page). In particular:
+> the DP2x.** In particular:
 > - use a fully charged battery;
 > - use an SD card formatted in the camera;
-> - never turn the camera off, open the battery or card door, or remove the card
->   while an update is running.
+> - never turn the camera off, open the battery or card door, or take the card out
+>   while the update is running.
 >
-> The patch was tested on **one** camera only, with firmware 1.02. It is provided
-> "AS IS", WITHOUT WARRANTY OF ANY KIND, express or implied, including fitness for a
-> particular purpose. If you are not comfortable with the risk, don't use it.
+> It has been tested on **one** camera so far. It is provided "AS IS", WITHOUT
+> WARRANTY OF ANY KIND. If you are not comfortable with the risk, please don't use it.
 
-A patch for **Sigma DP2x firmware 1.02**. It stops the lens barrel retracting
-at every shutdown, and stops the retract-then-extend at start-up when the
-barrel is already out. This cuts needless wear on the barrel mechanism.
-Autofocus is unchanged.
+## What changes
 
-| | Stock 1.02 | Patched |
+| | Original Sigma firmware | With this update |
 |---|---|---|
-| Power off | Barrel retracts | Barrel stays out, shutdown is faster |
-| Power on, barrel retracted | Extends (warns if the cap is on) | Same |
-| Power on, barrel out | Retracts fully, then extends again | No barrel movement |
-| Focus | Recalibrates at start-up | Same (a short motor noise is normal) |
-| Playback idle / before a firmware update | Retracts | Same (kept as a recovery path) |
+| Turning the camera **off** | Lens goes back in | **Lens stays out.** The camera also turns off faster |
+| Turning the camera **on** (lens already out) | Lens goes all the way in, then back out | **Lens doesn't move** |
+| Turning the camera **on** (lens in) | Lens comes out, and warns you if the lens cap is on | Same as before |
+| Autofocus | Works normally | Same. You may hear a short focus-motor sound at switch-on; that's normal |
+| Leaving the camera in **playback** for a long time | Lens goes back in | Same as before |
 
-**Status:** tested and working on one camera (2026-09-26). See `NOTES.md` §7.
+Everything else in the camera works as normal. The update is based on Sigma's
+DP2x firmware **version 1.02**.
 
-## Install
-Follow **SIGMA's official DP2x firmware update procedure**. Only the file is different:
-1. Fully charge the battery. Format the SD card in the camera.
-2. Copy `build/DP2X102.BIN` to the root of the SD card. Check its SHA-256 first
-   (`shasum -a 256 DP2X102.BIN`):
-   `1c3a2fb566639d7ac27487e0628a3fc1bccb6eaa1d24f1b71d2ff62c9e5f6caf`
-3. Run the firmware update as SIGMA's instructions describe. Don't power off or
-   open any door while it runs.
+## How to install
 
-Or build it yourself from Sigma's stock `dp2x102.bin`. The script checks the input file and fixes the checksum:
-```
-python3 tools/patch_lens.py dp2x102.bin DP2X102.BIN
-```
+1. **Download the update file:**
+   [**DP2X102.BIN**](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/raw/main/build/DP2X102.BIN)
+2. **Fully charge** the camera battery.
+3. **Format** your SD card in the camera. This erases the card, so save your pictures first.
+4. Put the card in your computer and copy **DP2X102.BIN** onto it. Put it on the
+   main level of the card, **not** inside any folder, and don't rename it.
+5. Put the card back in the camera and **run the firmware update the same way as
+   SIGMA's official update instructions for the DP2x.**
+6. Wait until the update has **completely finished**. Don't touch any buttons or doors
+   while it runs.
+7. Turn the camera on. The first time, the lens comes out as usual. From then on it
+   stays out.
 
-**Revert:** flash Sigma's stock 1.02 firmware (`DP2X102.BIN` from Sigma).
+## How to go back to the original
 
-## Caveats
-- The camera is left with the barrel out: protect it, and don't push on it.
-  The front cap may not fit.
-- If power is lost *while* the barrel is moving, it may stop part-way.
-  To recover, stay in playback mode until the lens auto-retracts, then switch to shooting.
-- See the warning at the top: there's no warranty, and we're not responsible for any damage or a bricked camera.
-- This project is not affiliated with SIGMA Corporation. The DP2x firmware is SIGMA's copyright;
-  "SIGMA" and "DP2x" are SIGMA's trademarks and are used here only to identify the camera.
+Download the official **DP2x firmware 1.02** from SIGMA's support website and
+install it the same way. The camera will then behave exactly as it did before.
 
-## Details
-`NOTES.md` covers the reverse-engineering: file layout, checksum, CPU (Fujitsu FR,
-big-endian), the lens control flow, and each patched instruction. `tools/` contains
-the patch script and the disassembly helpers (`tools/disasm.sh` needs GNU binutils).
+## Good to know
+
+- **The lens now stays out when the camera is off.** Handle and store the camera
+  carefully, don't press on the lens, and note that the lens cap may not fit.
+- **Lens cap:** if the lens is in and you switch on with the cap still on, you get
+  the usual "Remove the front cap" message. Take the cap off and switch on again.
+- **If the lens ever gets stuck part-way out**, for example after the battery
+  came out while the lens was moving:
+  1. Switch to playback mode and leave the camera alone until the lens goes back in by itself.
+  2. Switch back to shooting, and the lens comes out properly again.
+
+  If that doesn't help, go back to the original Sigma firmware (see above).
+- Not affiliated with SIGMA Corporation. The DP2x firmware is SIGMA's copyright;
+  "SIGMA" and "DP2x" are SIGMA's trademarks, used here only to name the camera.
+
+---
+
+<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/).</sub>
