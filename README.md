@@ -54,6 +54,22 @@ DP2x firmware **version 1.02**.
 7. Turn the camera on. The first time, the lens comes out as usual. From then on it
    stays out.
 
+## What if I want the lens to retract?
+
+Sometimes you'll want the lens in, for example before putting the camera in a bag
+or fitting the lens cap:
+
+1. Switch the camera to **playback** mode (viewing your pictures).
+2. Leave it alone. Don't press any buttons.
+3. When the playback timeout is reached, the **lens retracts by itself**.
+4. You can now turn the camera off. The lens stays in.
+
+The next time you switch on in shooting mode, the lens comes out again as normal.
+
+**Tip:** if the camera switches itself off before the lens goes in, set **auto power
+off** to a longer time, or turn it off, in the camera's menu. Otherwise the camera
+turns off with the lens still out.
+
 ## How to go back to the original
 
 Download the official **DP2x firmware 1.02** from SIGMA's support website and
@@ -67,7 +83,7 @@ install it the same way. The camera will then behave exactly as it did before.
   the usual "Remove the front cap" message. Take the cap off and switch on again.
 - **If the lens ever gets stuck part-way out**, for example after the battery
   came out while the lens was moving:
-  1. Switch to playback mode and leave the camera alone until the lens goes back in by itself.
+  1. Retract it using the playback method above.
   2. Switch back to shooting, and the lens comes out properly again.
 
   If that doesn't help, go back to the original Sigma firmware (see above).
