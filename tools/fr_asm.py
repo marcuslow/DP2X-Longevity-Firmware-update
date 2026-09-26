@@ -36,7 +36,7 @@ def _enc(ins, pc, labels):
     if op == "ldi8":
         return bytes([0xc0 | (a[0] & 0xff) >> 4, (a[0] & 0xf) << 4 | a[1]])
     two = {  # op rj, ri  -> byte0, (rj<<4)|ri
-        "mov": 0x8b, "add": 0xa6, "sub": 0xac, "cmp": 0xaa,
+        "mov": 0x8b, "add": 0xa6, "sub": 0xac, "cmp": 0xaa, "and": 0x82, "or": 0x92,
         "ld": 0x04, "lduh": 0x05, "ldub": 0x06,          # ld @rj,ri
         "ld_r13": 0x00, "lduh_r13": 0x01, "ldub_r13": 0x02,   # ld @(r13,rj),ri
     }
@@ -72,6 +72,8 @@ def _enc(ins, pc, labels):
     fixed = {"leave": b"\x9f\x90", "ret": b"\x97\x20", "nop": b"\x9f\xa0"}
     if op in fixed:
         return fixed[op]
+    if op == "int":
+        return bytes([0x1f, a[0]])
     if op == "call_r":
         return bytes([0x97, 0x10 | a[0]])
     if op == "jmp_r":

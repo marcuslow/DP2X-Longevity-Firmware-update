@@ -265,3 +265,78 @@ at `0x801018d4` (`0x213068`), not x/y.
    and not waiting for the next frame is part of the speed-up.
 4. **Macro/range flag.** It is written by the half-press/mode code in both cameras (DP2x `0x38a8d0` ->
    `0x308372`; DP2 `0x37fd34` -> `0x302e32`), outside the engine. Reading it with `0x302e3c` is correct.
+
+## 7. Relocator (step 2, done 2026-09-27)
+
+`tools/port_af.py --report` builds the port and prints the layout and every relocated reference. It writes no
+image until the hooks exist (`--unhooked` writes a test image that is **not** flashable).
+
+**What it does:**
+- Copies the DP2x ranges `0x283714-0x284521`, `0x2d905e-0x2d94bb`, `0x38a594-0x38a611`, `0x38a7e8-0x38a853`,
+  `0x38ad38-0x38b26f`. Range 3 ends at the `ret` of `0x38a594`; `0x38a614` after it is the DP2x motor timer callback,
+  which isn't ported.
+- It cuts units after every unconditional exit and merges pieces that a branch spans, instead of using cg.py's function
+  starts. Those starts are wrong in two ways here: prologues come after register loads (`0x38b038`), and
+  `call:d f+2` runs the callee's `st rp,@-r15` in the delay slot (`0x38a5ac`).
+- It keeps only what the entry points reach (`0x28425a`, `0x38b038`, `0x38b090`, `0x38b188`, `0x38b1d4`, `0x38a594`):
+  46 units, 6036 B. Dropped: `0x284044`/`0x2840e6` (called only by the DP2x debug/diagnostic handler `0x311738`),
+  `0x284448` (see below) and `0x38b1c8` (a result getter).
+- It rewrites `ldi:32`, `call`, branches, and the switch table `0x3c0c60` (7 pointers). Far calls get a trampoline
+  (`ldi:32 #t,r12; jmp @r12`), and the tool refuses if the `call:d` delay slot writes r12. Any unclassified constant
+  `>= 0x40000` is an error. The `KEEP` list holds the ones checked by hand.
+- The motor-state byte: 4 `ld`/`st` sites become `ldub`/`stb`. The tool checks that the address register has no other
+  use.
+- Verify: objdump re-disassembles the output. All 2356 instructions match the source with the mapped operands.
+- Space claim: the NoContrast pointer `0x27f6ee` -> `0x3800c8`. A scan checks that no other DP2 code refers into the
+  reused block, apart from:
+  - `0x27fb4a`: in `0x27fac8`, which is referenced only from inside the old engine
+  - `0x3048ea`/`0x3048f6`: `0x280000` there is a clamp limit
+  - `0x37fe30`, `0x3817f4`, `0x381810`: the hooks replace these
+
+**Maps decided here:**
+- UI calls in the AF end (frames, LEDs, beeps, `0x2130e4`, `0x23941c`) -> the DP2 `return 0` at `0x3800c8`.
+- DP2x moves `0x38ab64`/`0x38abf4` -> wrappers that store the direction byte (DP2x `0x6a019a8c`, 0 = minus, 1 = plus),
+  then jump to DP2 `0x381164`/`0x381350`. On the DP2x the direction is written by the command sender `0x38a144`,
+  inside the moves.
+- DP2x hold `0x38a1a0` -> a new routine: `wai_flg(0x35)`, `0x250c28(8, 0x8517|dir<<5)`, `0x3836bc(2,1)`, state byte 0,
+  `dly_tsk(1)`. That is the DP2's own hold tail (`0x381048` sends `0x8517`, `0x381228` sends `0x8537`), with the DP2x
+  direction logic. The DP2x also busy-waits `0x38a1c4` (0x8ca0 loops) on a direction change; that isn't ported.
+- The interrupt chain `0x38a594` reaches only the two move wrappers, never the (blocking) hold. The DP2 and DP2x moves
+  make the same syscalls (`wai_flg`, `clr_flg`, `set_flg`), so calling them from the ISR behaves as on the DP2x.
+- New RAM (0x7cc B at `0x801574f4`): engine context, library params, lens/task block `0x6a019a64-0x6a019a8f` (the
+  shared `a70`/`a78` go to the DP2 variables; `a74` is forbidden), `0x6a01b78c`, and the library work buffer
+  `0x6a025980`. The buffer gets 0x190 B, which is the gap to the next DP2x variable. The library itself uses no fixed
+  RAM in that range: it takes the params by pointer.
+
+**Tuning graph: correction.** The engine only reads it (`check_tuning` proves every access path), so it goes into flash
+(608 B). The parts actually read:
+- `[T]` -> P, `[P]` -> S.
+- S+8: settings (0x34 B), whose curve pointers at +0x14/+0x2c point to two 0x88-B curve tables.
+- S+0x18: window count.
+- **S+0xc: an object O** (`0x00030021 0x01010000`, +8 -> a mask table handed to library param `0x801552e4`).
+- The mask table is 0xea B (26 rows of eight 0x55 and one 0x40). It is identical in the DP2 (`0x6a01b3e8`).
+
+So the graph extends past `0x6a01b9fb`, the end section 6 gave; that was wrong. S and O have the same values and
+layout in the DP2 (`0x6a01af28`/`0x6a01af4c`); only the settings and curves differ.
+
+**Free space left: 18 B.** The hooks need their own room:
+- the bodies of the three DP2 functions they replace (`0x37fdfc` 96 B, `0x37fe5c` 28 B, `0x37fe78`)
+- the dead old task-6 body `0x3817a0` (240 B) once entry 6 is repointed
+
+**For step 3 (hooks):**
+1. Task-6 entry wrapper: zero the new RAM (0x7cc B) and copy `init_data` (44 B of DP2x .data) to the lens/task block.
+   Then jump to the ported `0x38b1d4`.
+2. The timer callback pointer `0x381014` -> a wrapper: DP2 `0x380f84`, then the ported `0x38a594`.
+3. Start/poll/abort adapters as in section 6.
+4. **Open: engine state 3 = "move by N steps".**
+   - The dispatcher `0x284114` runs, by engine state `0x80150fac`: 1 the AF scan (`0x283842`), 2 `0x283776`,
+     3 `0x283822`. State 3 moves the lens once by `0x80150fa0`.
+   - The DP2x sets it from the mode hook `0x38a854(0)`: an event through `0x3081d8` (== DP2 `0x302c98`), then state 3.
+     The step count comes from `0x38b344` -> `0x284448(n)`. `0x38b344` does float focus-position maths; its DP2 twin
+     is `0x3821f4` (0.86).
+   - The DP2 twin of the mode hook (`0x37fc74`/`0x37fcac`) only sends the event to the old module. `0x3821f4` uses
+     old-module accessors (`0x302e84`, `0x302f10`) and never calls a move.
+   - So on the DP2 this repositioning probably runs in the old module, frame by frame from the old task 6 (`0x27f7da`).
+     If so, replacing task 6 breaks it unless the hooks do what the DP2x does.
+   - Find out what drives it (callers `0x238ac0`, `0x238d2c`: probably MF, or the preset focus distance) before
+     repointing task 6.
