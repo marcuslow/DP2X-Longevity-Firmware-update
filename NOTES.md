@@ -239,7 +239,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 
 ## 10. Resume here (session ended 2026-09-26)
 
-**Branch `experimental-ev`:** `build/DP2X102.BIN` here is the full build (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200` + `--eval-bias -0.5`), SHA-256 `1855cdc5...4f73`. It's the same file as `build/DP2X102_test3.BIN`. Copy `build/DP2X102.BIN` straight to the card root. On this branch it is always the build to flash. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5`. **Flashed 2026-09-26. The user reports the EV bias seems to be working.** Still to check: M-mode meter offset in Evaluative, and the AF refine result.
+**Branch `experimental-ev`:** `build/DP2X102.BIN` here is the full build (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200` + `--eval-bias -0.5`), SHA-256 `1855cdc5...4f73`. It's the same file as `build/DP2X102_test3.BIN`. Copy `build/DP2X102.BIN` straight to the card root. On this branch it is always the build to flash. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5`. **Flashed 2026-09-26. The user reports the EV bias seems to be working.** Still to check: M-mode meter offset in Evaluative.
 
 **On the camera now:** `build/DP2X102_test2.BIN` (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`), SHA-256 `4dd5735f...c4ac`.
 Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102_test2.BIN --af-refine 8 --shutter-count --iso-max-200`.
@@ -249,13 +249,13 @@ Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `build/DP2X102.BIN` 
 - Lens patch: done, confirmed (section 7).
 - Shutter count on the version screen: done, confirmed (9.1, 9.7).
 - ISO choices limited to Auto/50/100/200: done, confirmed (9.8).
-- AF refine 16 -> 8: **testing in progress.** The user is comparing AF speed and sharpness (close-up f/2.8, distant, dim; about 5 tries each; slow-motion video for timing).
+- AF refine 16 -> 8: **done, accepted.** The user tested it on the camera and is happy with it (2026-09-26). It stays in the build.
+- Evaluative -0.5 EV bias: done, working (9.11).
 
-**Next steps, depending on the AF result**
-1. Faster and still sharp: consider option C, skipping the refine pass (go straight to the interpolated coarse peak with a same-side approach). Needs injected code in the factory AFE-gain cave `0x27eb4e`-`0x27f405` (9.5), plus neutralising `0x27f6b2`.
-2. No difference: the clamp to `0x8015153c` in `0x283e2c` probably overrides the offset. Work out what the evaluator stores in `0x8015153c` (from `0x307da6`'s per-window output, local `r14-64` in `0x2d928e`).
-3. More misses or softer focus: revert to 16 (build without `--af-refine`).
+**AF: no further work planned.** Ideas kept for reference only:
+- Option C, skipping the refine pass entirely (straight to the interpolated coarse peak, approached from the same side). It would need injected code in the cave (9.5).
+- The clamp to `0x8015153c` in `0x283e2c` may limit how much the offset matters (what the evaluator stores there comes from `0x307da6`'s per-window output, local `r14-64` in `0x2d928e`).
 
 **Parked**
 - Magnify during half-press (9.4): the user will test which button (key bit `0x1000000`) triggers the stock magnify. Then optionally auto-enable when focus is green.
-- Rejected ideas: a faster AF clock (already 40 MHz), bigger coarse steps (the user trusts Sigma's tuning), a lower refine minimum of 5 frames (saves almost nothing).
+- Rejected ideas: HEIC instead of JPEG (JPEG is a hardware block `Im_JPEGENC_*`, no HEVC hardware, a software encoder is far too big and slow for the FR CPU, and gain maps need an HDR rendition the camera never makes; shoot X3F and convert on the computer instead), a faster AF clock (already 40 MHz), bigger coarse steps (the user trusts Sigma's tuning), a lower refine minimum of 5 frames (saves almost nothing).
