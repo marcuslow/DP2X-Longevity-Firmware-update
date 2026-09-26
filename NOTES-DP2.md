@@ -83,7 +83,30 @@ RTOS task table at `0x200000` (28-byte entries from `0x20001c`: flags, entry, st
   - AF point `0x2130e4`
   - half-press helpers `0x238a8a`/`0x238ab0`/`0x23941c`, and `0x27007c`/`0x2700a4`/`0x397fd8`/`0x398018`/`0x374dc8`/`0x387520`
 
-**Code space:** the DP2 image has a 650 KB zero run at `0x160aa4-0x1fffff`, just below the code at `0x200000`.
+**Code space (chosen): overwrite the old DP2 AF engine module `0x27fe04`-`0x2818f9` (6902 B).** The module ends
+at `0x28183c`+190 B. From `0x2818fa` on it is other modules (getters called from `0x2788da`, `0x38bbd4`, ...).
+Every way into it (checked 2026-09-27):
+- Direct calls from outside, 6 of them:
+  - `0x2800da` <- `0x37fdfc` (AF start, half-press only): replaced.
+  - `0x28018e` and `0x280218` <- task 6 `0x3817a0`: replaced.
+  - `0x2808b0` <- `0x27fac8`, which is only called from inside the module (`0x2805b0` <- `0x2800da`), so dead.
+  - `0x280254` <- `0x27f6ea`. That is the old AF module's "NoContrast done" callback: its pointer is at `0xc3644` in
+    the callback table in .data. It only runs while the old module is running. Keep a stub at `0x280254` that
+    returns 0; the callback then takes its "NoContrast done" path and doesn't retry through `0x383758`.
+  - `0x280acc` <- `0x204a84` (key scanning). It is a 24-byte setter (`[0x6a01aef8] = arg`). Keep it in place.
+- Pointer table `0x40a850` (`0x28108a`/`0x281116`/`0x2812b0`): read only from inside the module (`0x281018`).
+- No other ldi:32 or raw pointers. The other hits are image or font data, or pairs of 16-bit values
+  (for example `0xc3014` = 40, 218).
+- The old AF module (`0x302xxx`) can only be *started* (`0x302c52`/`0x302c32`) by the half-press start `0x37fdfc`,
+  task 6 and the NoContrast retry `0x383758`. All three are gone after the port.
+  - Other code, `0x237e36` and `0x238ac0` (via `0x37fc74`/`0x37fcac`/`0x37fd34`), still sends it cancel/stop events.
+    That's harmless while it is idle.
+  - Those paths must also stop the new engine. That is part of the interface work.
+- The old task-6 body `0x3817a0` (240 B) also becomes dead, but it sits between live lens functions; reuse it only
+  if needed.
+- Space: 6902 B minus the stubs, against about 5.5 KB of ported code.
+
+**Fallback code space:** the DP2 image has a 650 KB zero run at `0x160aa4-0x1fffff`, just below the code at `0x200000`.
 - No `ldi:32` in the code points into it. The candidates `0x177000`/`0x186000`/`0x189000`/`0x1b9000`/`0x1e0000`
   are sizes or multipliers, and `0x1f0030` is a task PS value, the same as in the DP2x.
 - Raw words in data that fall in the range were not all checked.
