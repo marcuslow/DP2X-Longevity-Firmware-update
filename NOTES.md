@@ -212,6 +212,20 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - Auto-ISO behaviour and the ISO the camera applies internally are unchanged. Only the choices offered change.
 - **2026-09-26: flashed in `build/DP2X102_test2.BIN`. Works:** QS and MENU offer only Auto/50/100/200.
 
+### 9.9 AFE (analog front end) gain and highlight headroom (analysis only)
+- Still-capture AFE gain: `0x2451e6(step)` writes three 16-bit gains (one per sensor layer) to AFE regs 0/2/4 (`|0x2000`), from RAM table `0x6a018d3c` (6 bytes per step).
+  - Alternative table `0x6a018d6c` is used only when the factory test flag `0x6a01b3f0` is set (service USB command).
+  - AF uses `0x6a018d54`.
+- The table is filled at start-up (`0x244ca4`) from per-camera EEPROM calibration (`0x24a754` reads at `0x31e`/`0x320`, 24 bytes = 4 steps x 3 layers). On failure ("AFE Gain Init Error") the fallback is `0x6a018d84`: step 0 = `0x000`, 1 = `0x0aa`, 2 = `0x1ff`, 3 = `0x353`.
+- The requested ISO is converted to an analog step plus a digital remainder in `0x244f..`-`0x2450d2` (double maths, base 50.0; step -> `0x6a018d10`, digital gain -> `0x8010b124`). The threshold table `0x6a018cd0` is filled at runtime, so the exact ISO -> step mapping wasn't confirmed statically.
+- Conclusion: step 0 is gain code 0, the AFE minimum. There's no lower analog setting, so firmware can't add highlight headroom. The DP2 vs DP2x difference is hardware. The practical mitigation is exposing less.
+
+### 9.10 Metering and EV compensation (analysis only; nothing patched)
+- Metering setting (`0x21242c`/`0x212458`): 5 = Evaluative, 2 = Center Weighted Average, 3 = Spot (MENU options `0xca...`, labels `0x46af58`...). `0x21b8e0` maps 5 -> AE mode 0, 2 -> 1, 3 -> 2 via `0x38674c`, which stores the AE mode in `0x6a019628` and loads that mode's zone-weight map (`0x3be7dc` + mode*128).
+- EV compensation: UI index (9 = 0 EV, 1/3-EV steps) stored by `0x389c1c` at `0x8010bc3c` (AE struct `0x8010bbfc` + 0x40). Table `0x3c0198` (19 x s32, 16.16 EV: 65536 = 1 EV, 21845 = 1/3 EV).
+- The AE target functions `0x389726`/`0x389a7c` take the metered value from `0x38968c` and add or subtract the table entry. The metered value is also read through wrapper `0x38a084` by AF (`0x28425a`, `0x243c9a`) and others (`0x2558e4`, `0x25609e`, `0x38e3dc`).
+- Goal: an automatic -0.5 EV when metering is Evaluative. **Not implemented.** The patch attempt in this session was interrupted, so nothing was written for it. Workaround: set EV comp to -0.3 or -0.7 on the camera.
+
 ## 10. Resume here (session ended 2026-09-26)
 
 **On the camera now:** `build/DP2X102_test2.BIN` (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`), SHA-256 `4dd5735f...c4ac`.
@@ -230,5 +244,6 @@ Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `build/DP2X102.BIN` 
 3. More misses or softer focus: revert to 16 (build without `--af-refine`).
 
 **Parked**
+- Evaluative -0.5 EV auto-bias (9.10): analysis done, not implemented. The attempt was interrupted, so pick it up in a new session.
 - Magnify during half-press (9.4): the user will test which button (key bit `0x1000000`) triggers the stock magnify. Then optionally auto-enable when focus is green.
 - Rejected ideas: a faster AF clock (already 40 MHz), bigger coarse steps (the user trusts Sigma's tuning), a lower refine minimum of 5 frames (saves almost nothing).
