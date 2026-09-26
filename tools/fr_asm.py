@@ -9,7 +9,8 @@ Every encoding was checked against binutils objdump (fr30, big-endian).
 """
 import struct
 
-BR = {"bra": 0x0, "beq": 0x2, "bne": 0x3, "blt": 0xa, "bge": 0xb, "ble": 0xc, "bgt": 0xd}
+BR = {"bra": 0x0, "beq": 0x2, "bne": 0x3, "bc": 0x4, "bnc": 0x5, "blt": 0xa, "bge": 0xb, "ble": 0xc,
+      "bgt": 0xd, "bls": 0xe, "bhi": 0xf}
 RP = 16   # pseudo register number for rp in push/pop
 
 
@@ -37,7 +38,7 @@ def _enc(ins, pc, labels):
     two = {  # op rj, ri  -> byte0, (rj<<4)|ri
         "mov": 0x8b, "add": 0xa6, "sub": 0xac, "cmp": 0xaa,
         "ld": 0x04, "lduh": 0x05, "ldub": 0x06,          # ld @rj,ri
-        "ld_r13": 0x00, "ldub_r13": 0x02,                # ld @(r13,rj),ri
+        "ld_r13": 0x00, "lduh_r13": 0x01, "ldub_r13": 0x02,   # ld @(r13,rj),ri
     }
     if op in two:
         return bytes([two[op], a[0] << 4 | a[1]])
@@ -51,6 +52,9 @@ def _enc(ins, pc, labels):
             return bytes([0xa4, a[0] << 4 | a[1]])
         assert -16 <= a[0] < 0
         return bytes([0xa5, (a[0] + 16) << 4 | a[1]])
+    if op in ("lsl", "lsr"):                             # lsl/lsr #u4,ri
+        assert 0 <= a[0] < 16
+        return bytes([{"lsl": 0xb4, "lsr": 0xb0}[op], a[0] << 4 | a[1]])
     if op == "extsb":
         return bytes([0x97, 0x80 | a[0]])
     r14 = {"ld_r14": (0x2, 4), "st_r14": (0x3, 4), "lduh_r14": (0x4, 2),

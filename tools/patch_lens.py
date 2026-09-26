@@ -2,7 +2,7 @@
 """Patch Sigma DP2x firmware 1.02 so the lens barrel is not retracted at power-off
 and is not re-homed (retract + extend) at power-on when it is already out.
 
-Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5]
+Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5] [--af-fallback]
 See NOTES.md for the analysis behind each patch.
 """
 import argparse, hashlib, struct, sys
@@ -403,6 +403,51 @@ def af5_patches():
          "AF-point screen DISPLAY (key 0x10): off-centre -> jump to centre, else stock grid/free switch"),
     ]
 
+# AF fallback: when the coarse scan ends in failure, aim the final lens move at the position of the highest contrast
+# seen during the scan (instead of the AF library's last estimate), if that maximum stands clearly above the floor.
+# The box stays red. Hooked at the AF end function 0x38b090(r): r = 2 is failure; the stock finish state 0x2842f6
+# then moves the lens to 0x8015153e (coarse state 0x80150fac = 1). History: n @0x80150fb8, contrast B (u32)
+# @0x80151154, positions (negated, u16) @0x80151474. Contrast at frame i belongs to the lens position of frame
+# i-1 (stock latency correction 0x283f6a). See NOTES.md 9.15.
+AFFB_BASE = 0x27eec0          # after the larger AF-point variant (af-25 ends 0x27eea2, af-5 0x27edf0)
+
+AFFB_SRC = [
+    "fb",
+    ("cmpi", 2, 4), ("bne", "fb_out"),                               # failure only
+    ("ldi32", 0x80150fac, 12), ("ld", 12, 0), ("cmpi", 1, 0), ("bne", "fb_out"),   # coarse scan only
+    ("ldi32", 0x80150fb8, 12), ("ld", 12, 5), ("cmpi", 3, 5), ("blt", "fb_out"),   # n >= 3
+    ("ldi32", 0x80151154, 13),
+    ("ldi8", 0, 6), ("ldi8", 0, 7), ("ldi8", 0, 1), ("ldi32", 0xffffffff, 2),    # i, argmax, max, min
+    "fb_loop",
+    ("mov", 6, 0), ("lsl", 2, 0), ("ld_r13", 0, 3),                  # r3 = B[i]
+    ("cmp", 2, 3), ("bnc", "fb_nomin"), ("mov", 3, 2),               # min (unsigned)
+    "fb_nomin",
+    ("cmp", 1, 3), ("bls", "fb_nomax"), ("mov", 3, 1), ("mov", 6, 7),    # max (unsigned), argmax
+    "fb_nomax",
+    ("addi", 1, 6), ("cmp", 5, 6), ("blt", "fb_loop"),
+    ("mov", 2, 0), ("lsr", 2, 0), ("add", 2, 0),                     # r0 = min + min/4
+    ("cmp", 0, 1), ("bls", "fb_out"),                                # max must beat it
+    ("cmpi", 0, 7), ("beq", "fb_i0"), ("addi", -1, 7),               # latency: position of frame argmax-1
+    "fb_i0",
+    ("mov", 7, 0), ("add", 7, 0),
+    ("ldi32", 0x80151474, 13), ("lduh_r13", 0, 0),
+    ("ldi32", 0x8015153e, 12), ("sth", 0, 12),                       # final-move target
+    "fb_out",                                                        # displaced stock prologue, then resume
+    ("push", 8), ("push", RP), ("enter", 12), ("mov", 4, 8),
+    ("ldi32", 0x38b098, 12), ("jmp_r", 12),
+]
+
+def affb_patches():
+    code, L = assemble(AFFB_SRC, AFFB_BASE)
+    assert AFFB_BASE + len(code) <= 0x27f6b2, "af-fallback code overflows the cave"
+    hook = assemble([("ldi32", L["fb"], 12), ("jmp_r", 12)], 0)[0].hex()
+    return [
+        ("affb-cave", AFFB_BASE, None, code.hex(),
+         f"cave: AF fallback to highest-contrast position ({len(code)} B, ends {AFFB_BASE + len(code):#x})"),
+        ("affb-hook", 0x38b090, "170817810f038b48", hook,
+         "AF end: on coarse-scan failure, final move goes to the highest-contrast position seen"),
+    ]
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inp"); ap.add_argument("out")
@@ -420,6 +465,8 @@ def main():
                     help="AF-point grid mode: 25 points (5x5), centre normal size, the rest small; DISPLAY jumps to the centre (uses the cave)")
     ap.add_argument("--af-5", action="store_true",
                     help="AF-point grid mode: 5 points (centre + rule-of-thirds), stock size; DISPLAY jumps to the centre")
+    ap.add_argument("--af-fallback", action="store_true",
+                    help="when AF fails, move the lens to the sharpest position seen during the scan (box stays red)")
     a = ap.parse_args()
     if a.af_25 and a.af_5:
         sys.exit("--af-25 and --af-5 are alternatives (same cave space)")
@@ -442,7 +489,9 @@ def main():
         todo += af25_patches()
     if a.af_5:
         todo += af5_patches()
-    if a.eval_bias or a.af_25 or a.af_5:
+    if a.af_fallback:
+        todo += affb_patches()
+    if a.eval_bias or a.af_25 or a.af_5 or a.af_fallback:
         o = off(CAVE_LO)
         if hashlib.sha256(d[o:off(CAVE_HI)]).hexdigest() != CAVE_STOCK_SHA:
             sys.exit("code cave 0x27ea2e-0x27f8e3 is not stock")

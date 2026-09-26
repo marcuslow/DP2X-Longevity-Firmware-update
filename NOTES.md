@@ -302,7 +302,25 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - Verified by running the built image bytes of `next5` and `near5` on a small FR emulator: all 20 point x arrow cases match option A, arrows from 7 off-grid inputs always land on a valid point, and 11 nearest-point cases are correct.
 - Test: the AF-point screen shows 5 same-size boxes on the thirds, the arrows move as above, and DISPLAY returns to the centre. Check that AF works at each point and that the point survives power-off.
 
+### 9.15 AF fallback to the sharpest position seen (`--af-fallback`, branch `experimental-affb`, not yet flashed)
+- User test: a person at about 0.7 m, dim light (-3 EV metered, f/2.8, ISO 200, 1/5 s), normal AF, no AF-assist lamp. AF kept failing, although in MF the peak is clearly visible on the LCD.
+- How AF ends (from a read-only analysis, spot-checked):
+  - `0x38b090(r)`: 1 = success (green), 2 = failure (red). Then the finish state `0x2842f6` moves the lens to `0x8015153e` (coarse state, `0x80150fac` = 1) or `0x80151542` (refine state 2), through `0x283df6(p)`, which moves to -p. Positions are kept negated.
+  - The per-frame store `0x2843a2(A, B, C, pos)` records B (u32) at `0x80151154` and -pos (u16) at `0x80151474`; n is at `0x80150fb8`, max 100.
+  - The contrast of frame i belongs to the lens position of frame i-1 (`0x283f6a`).
+  - Likely dim-light culprit: `0x283afc` rejects a found peak when n >= 10 and B[best] < 30000 (`0x283b5a` `9b017530`). That is an absolute number with no scaling for light level, so a real but weak peak gets rejected.
+  - A dim scan starts at a range end (`0x284182`, meter < `0x50000`) and sweeps the whole range once, without a reversal. So the history holds the whole scan when it fails.
+- Patch: the entry of `0x38b090` (`170817810f038b48`) jumps to a 124 B routine at `0x27eec0`, placed after either AF-point variant.
+  - If r = 2, the state is coarse and n >= 3, it finds max/min B (unsigned). If max > min + min/4, it writes pos[argmax-1] (negated, as stored) to `0x8015153e`. Then it runs the displaced prologue and resumes at `0x38b098`.
+  - The box stays red. Success, the refine state, flat noise and fewer than 3 frames are left stock.
+  - Other `0x38b090(2)` callers (aborts, a released half-press) would also aim at the best position so far. That looks harmless.
+  - Verified by running the built bytes on the FR emulator with synthetic scans: clear peak, flat noise, first-frame peak, n = 2, success, refine state, huge values.
+- Not done yet (optional next step): relax the 30000 threshold (for example to 10000, `9b012710`), so weak real peaks count as focus (green). Risk: a noise peak could be accepted as green at the wrong focus.
+- Test: the same dim scene. Expect a red box, but the subject should now be sharp, or close to it, instead of the lens landing elsewhere. Check that normal-light AF is unchanged.
+
 ## 10. Resume here (session ended 2026-09-26)
+
+**Branch `experimental-affb`:** `build/DP2X102.BIN` = the af5 full build + `--af-fallback` (9.15), SHA-256 `7cb9fb81...f231`. Copied to the SD card 2026-09-26, not yet flashed. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.
 
 **Branch `experimental-af5`:** `build/DP2X102.BIN` = the full build with `--af-5` instead of `--af-25` (9.14), SHA-256 `04518854...ce94`. **Flashed 2026-09-26; the user reports it works.** This is what the camera runs now, and `main`'s `build/full/DP2X102.BIN`. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5`.
 
