@@ -235,13 +235,33 @@ at `0x801018d4` (`0x213068`), not x/y.
   each frame for the old module; not needed.
 - In the old block: `0x280254` becomes a `return 0` stub. `0x280acc` (24 B setter) stays.
 
-**Open questions:**
-1. **DP2 9-point auto AF.** The old engine picks the window in focus. The DP2x engine uses one window.
-   Proposal: in auto mode, AF on the centre point. The DP2x has no auto mode.
-   Also check what the DP2 front half does with the window in auto mode.
-2. **Contrast scale.** DP2x thresholds (`B < 30000` = no contrast, `B/8` drop, fallback `min/4`) assume DP2x
-   contrast levels. Compare the DP2 and DP2x HPF coefficient and window templates (`0x27f92a` vs `0x283514` data)
-   before trusting them.
-3. The DP2x per-frame read `0x38af12` waits only for bit `0x20` of `0x40000006`. The DP2 frame wait `0x382100`
-   sets and waits for bits `0x20` **and** `0x08`. Find out what `0x08` is before choosing.
-4. Who writes the macro/range variable `0x8015a91a` on the DP2 (the old engine or the module)?
+**Open questions, resolved 2026-09-27:**
+1. **9-point auto AF: decided by the user, centre point.**
+   - AF mode is `0x801018d0`: 1 = auto, 2 = selected point. It is only meaningful in some shooting modes
+     (`0x213014`).
+   - In auto mode the poll adapter returns `0x10`, which is 1<<4, the centre.
+   - Still to do: make sure the front half programs the centre window in auto mode.
+2. **Contrast scale: same AF block setup on both cameras.**
+   - The HPF coefficients (DP2 `0x6a01ad5c` / DP2x `0x6a01b5bc`, loader `0x27f82e` == `0x283418`) are identical.
+   - The AF-mode window templates are identical: mode1, normal, and (`0x28`, `0xda`). DP2 `0x3835dc` ==
+     DP2x `0x38e3dc` -> `0x38a908(1)`.
+   - So the contrast numbers differ only by the sensor/AFE signal level, which firmware can't show.
+   - The DP2x has an extra *small-frame* window (`0x14`, `0x78`); the DP2 has no frame-size setting.
+   - **The contrast library tuning differs.** Settings object: DP2x `**0x6a01b798` = `0x6a01b7bc`, +8 ->
+     `0x6a01b7ec`; DP2 `0x6a01af28`, +8 -> `0x6a01af58`. Same layout: two blocks of
+     (`0x71000`, `0x50000`, lo, hi, `0xc0022`, curve table ptr), then `0x5f5fff`, and so on.
+     - DP2x: lo/hi `0x350`/`0x31f` and `0x378`/`0x39b`.
+     - DP2: `0x3ba`/`0x6c3` and `0x3fe`/`0x4a9`.
+     - The curve tables differ too.
+     - `0x2d905e` copies settings +0..+0x30 into the library parameters at `0x801552ac`-`0x801552e8`;
+       the window count is `0x6a01b7bc`+0x18.
+     - Plan: port the DP2x settings (the default). Add a build option that uses the DP2's own settings,
+       in case the values are sensor-specific.
+   - In the pointer walk, `0x6a01b930`-`0x6a01b9bb` (RAM pointers, and a function table `0x28307a`-`0x28338a`)
+     is the old module's callback objects, which are dead in the DP2x (the counterpart of the DP2 `0xc3644`).
+     It isn't part of the settings.
+3. **Frame wait.** The DP2 `0x382100` waits for AF-done (`0x40000006` bit `0x20`) *and then* bit `0x08`, probably
+   the next frame start. The DP2x `0x38af12` waits only for `0x20`. Use the DP2x logic: the AF block is identical,
+   and not waiting for the next frame is part of the speed-up.
+4. **Macro/range flag.** It is written by the half-press/mode code in both cameras (DP2x `0x38a8d0` ->
+   `0x308372`; DP2 `0x37fd34` -> `0x302e32`), outside the engine. Reading it with `0x302e3c` is correct.
