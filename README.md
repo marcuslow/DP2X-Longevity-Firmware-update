@@ -58,6 +58,7 @@ Everything in the lens-only version, plus:
 | **Evaluative metering** | Meters normally | Pictures come out **1/2 stop darker**, to protect highlights. Only in Evaluative; your EV compensation still works on top, and the screen still shows 0 |
 | **Focus points** | 9 points (3 x 3) | **5 points:** the centre plus the four rule-of-thirds points, all the normal box size. From the centre, ▲ goes to top-left, ▶ top-right, ▼ bottom-right and ◀ bottom-left; between the corners, ◀ ▶ switch left/right and ▲ ▼ switch top/bottom |
 | **Back to the centre point** | Not available | On the focus-point screen, **DISPLAY** jumps back to the centre box. Press it again on the centre to switch to free-move mode (the original DISPLAY action) |
+| **Autofocus in dim light** | If focus can't be confirmed, the lens stops wherever the scan's last estimate was | If focus can't be confirmed, the lens goes to the **sharpest position seen** during the scan. The box still shows red, so you know it's a best guess |
 
 **Before installing the full version:**
 
@@ -132,4 +133,4 @@ To switch between the lens-only and full versions, just install the other file t
 
 ---
 
-<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). The full version is built from branch [`experimental-af5`](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/tree/experimental-af5), which has the full notes and patch script.</sub>
+<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). Both downloads are built from Sigma's `dp2x102.bin` with `tools/patch_lens.py`. The lens-only build uses no options; the full build uses `--af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.</sub>
