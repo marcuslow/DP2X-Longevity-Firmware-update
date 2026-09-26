@@ -220,13 +220,24 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - The requested ISO is converted to an analog step plus a digital remainder in `0x244f..`-`0x2450d2` (double maths, base 50.0; step -> `0x6a018d10`, digital gain -> `0x8010b124`). The threshold table `0x6a018cd0` is filled at runtime, so the exact ISO -> step mapping wasn't confirmed statically.
 - Conclusion: step 0 is gain code 0, the AFE minimum. There's no lower analog setting, so firmware can't add highlight headroom. The DP2 vs DP2x difference is hardware. The practical mitigation is exposing less.
 
-### 9.10 Metering and EV compensation (analysis only; nothing patched)
+### 9.10 Metering and EV compensation
 - Metering setting (`0x21242c`/`0x212458`): 5 = Evaluative, 2 = Center Weighted Average, 3 = Spot (MENU options `0xca...`, labels `0x46af58`...). `0x21b8e0` maps 5 -> AE mode 0, 2 -> 1, 3 -> 2 via `0x38674c`, which stores the AE mode in `0x6a019628` and loads that mode's zone-weight map (`0x3be7dc` + mode*128).
 - EV compensation: UI index (9 = 0 EV, 1/3-EV steps) stored by `0x389c1c` at `0x8010bc3c` (AE struct `0x8010bbfc` + 0x40). Table `0x3c0198` (19 x s32, 16.16 EV: 65536 = 1 EV, 21845 = 1/3 EV).
 - The AE target functions `0x389726`/`0x389a7c` take the metered value from `0x38968c` and add or subtract the table entry. The metered value is also read through wrapper `0x38a084` by AF (`0x28425a`, `0x243c9a`) and others (`0x2558e4`, `0x25609e`, `0x38e3dc`).
-- Goal: an automatic -0.5 EV when metering is Evaluative. **Not implemented.** The patch attempt in this session was interrupted, so nothing was written for it. Workaround: set EV comp to -0.3 or -0.7 on the camera.
+- Sign: EV comp index < 9 (negative comp) *adds* the table value, so a larger value means a darker picture.
+- AE mode `0x6a019628` is written only by `0x38674c`, and only from the metering setting (`0x214004`..., `0x21b922`...). So 0 always means Evaluative.
+- Implemented as `--eval-bias EV` (9.11).
+
+### 9.11 Evaluative auto-bias (`--eval-bias -0.5`, branch `experimental-ev`, not yet flashed)
+- Both AE target functions have the same 10-byte sequence at `0x38976c` / `0x389ac0`: `call 0x38968c` (meter) followed by the start of the EV-comp block. Each is replaced with `ldi:32 0x27eb4e,r12; call @r12; bra <epilogue>` (the old `beq` to the epilogue becomes a `bra`). The rest of the old EV-comp code is left in place but is never reached.
+- Cave routine at `0x27eb4e` (56 bytes): calls the meter, applies EV comp exactly as stock (r8 = AE struct, r9 = EV table, both still set up by the caller), then, if `[0x6a019628] == 0`, adds `ldi:20 0x8000` (0.5 EV in 16.16) to r4. Positive `--eval-bias` values use `sub` instead.
+- `0x27f6b2` (factory AFE-gain adjust entry, return value unused by `0x27cc86`) starts with `ret`, so the service command can't run the overwritten code (9.5).
+- Not affected: the `0x6a019698` override path, the non-metered path (`+0x2c != 1`), and AF's direct meter reads via `0x38a084`. The EV comp shown on screen is unchanged. The bias is hidden.
+- Possible side effect: in M mode, if the exposure meter uses this target, it will read 0.5 EV off in Evaluative. Check on the camera.
 
 ## 10. Resume here (session ended 2026-09-26)
+
+**Branch `experimental-ev`:** `build/DP2X102.BIN` here is the full build (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200` + `--eval-bias -0.5`), SHA-256 `1855cdc5...4f73`. It's the same file as `build/DP2X102_test3.BIN`. Copy `build/DP2X102.BIN` straight to the card root. On this branch it is always the build to flash. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5`. Not yet flashed. Test: same scene, same EV comp, Evaluative vs Center Weighted. Evaluative should come out about 1/2 stop darker (compare the shutter speed shown on half-press). Also check that M mode and the AF are OK.
 
 **On the camera now:** `build/DP2X102_test2.BIN` (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`), SHA-256 `4dd5735f...c4ac`.
 Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102_test2.BIN --af-refine 8 --shutter-count --iso-max-200`.
@@ -244,6 +255,5 @@ Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `build/DP2X102.BIN` 
 3. More misses or softer focus: revert to 16 (build without `--af-refine`).
 
 **Parked**
-- Evaluative -0.5 EV auto-bias (9.10): analysis done, not implemented. The attempt was interrupted, so pick it up in a new session.
 - Magnify during half-press (9.4): the user will test which button (key bit `0x1000000`) triggers the stock magnify. Then optionally auto-enable when focus is green.
 - Rejected ideas: a faster AF clock (already 40 MHz), bigger coarse steps (the user trusts Sigma's tuning), a lower refine minimum of 5 frames (saves almost nothing).

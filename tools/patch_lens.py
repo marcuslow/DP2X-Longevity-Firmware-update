@@ -2,7 +2,7 @@
 """Patch Sigma DP2x firmware 1.02 so the lens barrel is not retracted at power-off
 and is not re-homed (retract + extend) at power-on when it is already out.
 
-Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200]
+Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV]
 See NOTES.md for the analysis behind each patch.
 """
 import argparse, struct, sys
@@ -71,6 +71,44 @@ def af_refine_patches(n):
          f"refine setup: target = peak + {n} (ldi:8 {n:#x},r1)"),
     ]
 
+# Automatic exposure bias when metering is Evaluative (AE mode 0 at RAM 0x6a019628), see NOTES.md 9.10/9.11.
+# The two AE target functions 0x389724/0x389a7c call the meter 0x38968c and then apply EV comp; that
+# call + EV-comp block is moved into a routine in the factory AFE-gain cave (NOTES.md 9.5), which then
+# adds the bias. 16.16 fixed point, 65536 = 1 EV; adding makes the picture darker (like negative EV comp).
+EVAL_CAVE = 0x27eb4e
+EVAL_CAVE_OLD = ("8e0f17810f309f80ffffff44a6e09f810042479cc18da5cd001cfdfd"
+                 "100c9f80ffffff5ca6e09f8100424784c18da5cd001cfdfd100cc000")
+
+def eval_bias_patches(ev):
+    step = round(abs(ev) * 65536)
+    if not 0 < step <= 2 * 65536:
+        sys.exit("--eval-bias must be non-zero and within +-2 EV")
+    op = "a604" if ev < 0 else "ac04"   # add r0,r4 (darker) / sub r0,r4 (brighter)
+    cave = ("1781"            # st rp,@-r15
+            "9f8c0038968c"    # ldi:32 0x38968c,r12
+            "971c"            # call @r12              ; r4 = metered value
+            "c40d0185"        # ldi:8 0x40,r13 ; lduh @(r13,r8),r5  ; EV comp index (9 = 0 EV)
+            "a895e208"        # cmp 9,r5 ; beq bias
+            "8b5db42d"        # mov r5,r13 ; lsl 2,r13
+            "a895fb030090"    # cmp 9,r5 ; bge:d minus ; ld @(r13,r9),r0   ; r9 = EV table 0x3c0198
+            "f002a604"        # bra:d bias ; add r0,r4
+            "ac04"            # minus: sub r0,r4
+            "9f8c6a019628"    # bias: ldi:32 0x6a019628,r12
+            "04c0a800e303"    # ld @r12,r0 ; cmp 0,r0 ; bne done  ; AE mode 0 = Evaluative
+            f"9b{step >> 16:x}0{step & 0xffff:04x}"   # ldi:20 step,r0
+            + op +
+            "07819720")       # done: ld @r15+,rp ; ret
+    assert len(cave) <= len(EVAL_CAVE_OLD)
+    call = "9f8c0027eb4e971ce009"   # ldi:32 cave,r12 ; call @r12 ; bra <function epilogue>
+    return [
+        ("eval-afe-entry-off", 0x27f6b2, "1781", "9720",
+         "factory AFE-gain adjust (service USB cmd): return at once, its body is reused as a code cave"),
+        ("eval-bias-cave", EVAL_CAVE, EVAL_CAVE_OLD[:len(cave)], cave,
+         f"cave: meter + EV comp, then {ev:+g} EV when metering = Evaluative"),
+        ("eval-bias-call1", 0x38976c, "d78fc40d0185a895e209", call, "AE target 0x389724: meter+EV comp -> cave"),
+        ("eval-bias-call2", 0x389ac0, "d5e5c40d0185a895e209", call, "AE target 0x389a7c: meter+EV comp -> cave"),
+    ]
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inp"); ap.add_argument("out")
@@ -82,6 +120,8 @@ def main():
                     help="show the shutter count on the setup-menu version line (replaces the serial number)")
     ap.add_argument("--iso-max-200", action="store_true",
                     help="QS and MENU offer only ISO Auto/50/100/200 (set ISO to one of these before flashing)")
+    ap.add_argument("--eval-bias", type=float, metavar="EV",
+                    help="extra exposure bias in Evaluative metering only, e.g. -0.5 (uses the AFE-gain cave)")
     a = ap.parse_args()
     d = bytearray(open(a.inp, "rb").read())
     if d[:16] != b"SIGMA.CO0000DP2X" or d[0x10:0x1b] != b"1.02.0.0001" or len(d) != 0x804080:
@@ -96,6 +136,8 @@ def main():
         todo += SHUTTER_COUNT
     if a.iso_max_200:
         todo += ISO_MAX_200
+    if a.eval_bias:
+        todo += eval_bias_patches(a.eval_bias)
     for name, addr, old, new, desc in todo:
         o = off(addr); old, new = bytes.fromhex(old), bytes.fromhex(new)
         if d[o:o+len(old)] != old:
