@@ -283,7 +283,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - Not changed: the mode icon (`0x2d687e`) still shows the stock 9-point icon. Playback/EXIF names only the 9 stock positions.
 - Test: DISPLAY off-centre jumps to the centre, and DISPLAY on the centre switches to free move. The AF-point screen shows 25 boxes, the arrows step one box at a time and stop at the edges, and the selected box is highlighted. Check that AF works at the corners (smaller box) and that the point survives power-off. Switch to free move and back: the point should snap to the grid. Try the frame-size toggle.
 
-### 9.14 5-point AF (centre + rule of thirds) (`--af-5`, branch `experimental-af5`, not yet flashed)
+### 9.14 5-point AF (centre + rule of thirds) (`--af-5`, branch `experimental-af5`, flashed 2026-09-26, working)
 - The user found the 25-point grid "not great" and asked for 5 points instead: the centre plus the four rule-of-thirds intersections, all the stock normal box. `--af-5` replaces `--af-25` in the full build; the two are alternatives, since they use the same cave space.
 - Positions: (18,16), (4,4), (32,4), (4,28), (32,28).
   - The image is 2640 x 1760 and 1 grid unit = 32 px across / 24 lines down, so the thirds lines sit 13.75 -> 14 and 12.2 -> 12 units from the centre.
@@ -304,7 +304,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 
 ## 10. Resume here (session ended 2026-09-26)
 
-**Branch `experimental-af5`:** `build/DP2X102.BIN` = the full build with `--af-5` instead of `--af-25` (9.14), SHA-256 `04518854...ce94`. Copied to the SD card 2026-09-26, not yet flashed. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5`. If it's good, update `build/full/DP2X102.BIN` and the README on `main`.
+**Branch `experimental-af5`:** `build/DP2X102.BIN` = the full build with `--af-5` instead of `--af-25` (9.14), SHA-256 `04518854...ce94`. **Flashed 2026-09-26; the user reports it works.** This is what the camera runs now, and `main`'s `build/full/DP2X102.BIN`. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5`.
 
 **Branch `experimental-af25`:** `build/DP2X102.BIN` = the experimental-ev build + `--af-25` (9.13, including DISPLAY -> centre), SHA-256 `d616336a...7c85` (6 px side margin around the centre). **Flashed 2026-09-26; the user reports it works.** This is what the camera runs now. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-25`. Rollback: the `experimental-ev` build (`build/DP2X102_test3.BIN`, SHA `1855cdc5...`).
 
@@ -320,7 +320,8 @@ Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `main`'s `build/DP2X
 - ISO choices limited to Auto/50/100/200: done, confirmed (9.8).
 - AF refine 16 -> 8: **done, accepted.** The user tested it on the camera and is happy with it (2026-09-26). It stays in the build.
 - Evaluative -0.5 EV bias: done, working (9.11).
-- 25-point AF grid with DISPLAY -> centre: done, working (9.13).
+- 25-point AF grid with DISPLAY -> centre: done, working (9.13), then replaced by:
+- 5-point AF (centre + rule of thirds) with DISPLAY -> centre: done, working (9.14). It is the public full build.
 
 **AF: no further work planned.** Ideas kept for reference only:
 - Option C, skipping the refine pass entirely (straight to the interpolated coarse peak, approached from the same side). It would need injected code in the cave (9.5).
