@@ -283,7 +283,28 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - Not changed: the mode icon (`0x2d687e`) still shows the stock 9-point icon. Playback/EXIF names only the 9 stock positions.
 - Test: DISPLAY off-centre jumps to the centre, and DISPLAY on the centre switches to free move. The AF-point screen shows 25 boxes, the arrows step one box at a time and stop at the edges, and the selected box is highlighted. Check that AF works at the corners (smaller box) and that the point survives power-off. Switch to free move and back: the point should snap to the grid. Try the frame-size toggle.
 
+### 9.14 5-point AF (centre + rule of thirds) (`--af-5`, branch `experimental-af5`, not yet flashed)
+- The user found the 25-point grid "not great" and asked for 5 points instead: the centre plus the four rule-of-thirds intersections, all the stock normal box. `--af-5` replaces `--af-25` in the full build; the two are alternatives, since they use the same cave space.
+- Positions: (18,16), (4,4), (32,4), (4,28), (32,28).
+  - The image is 2640 x 1760 and 1 grid unit = 32 px across / 24 lines down, so the thirds lines sit 13.75 -> 14 and 12.2 -> 12 units from the centre.
+  - On the LCD: boxes centred at (161,108) and (105/217, 72/144), with no overlaps. That is +-56 px / +-36 px against about +-53 / +-36 for a 320 x 213 image.
+  - All five are inside the stock normal-frame range (x 2..34, y 2..30). So the frame size, AF window, boot validation and the grid -> free-move clamp all stay stock, and no size hooks are needed.
+- Arrows (the user chose option A):
+  - Between corners, left/right pick the column and up/down the row.
+  - From the centre: up -> top-left, right -> top-right, down -> bottom-right, left -> bottom-left.
+  - Any off-grid point (for example an old 25-grid or stock 9-point setting) is treated as its nearest corner. DISPLAY -> centre is unchanged (`centre_key`, shared with af-25).
+- Code: 618 B at `0x27eb86`. Hooks:
+  - `0x2d7010` overlay (5 frames).
+  - `0x2d7090` snap (nearest point by city-block distance; it also stores the point).
+  - `0x2d6f22` erase (5 frames).
+  - `0x2d7164`/`0x2d720c`: both call `next5(x, y, key)`, reading the other coordinate from the cursor (it isn't updated until both have returned).
+  - `0x2d73bc` DISPLAY.
+- Verified by running the built image bytes of `next5` and `near5` on a small FR emulator: all 20 point x arrow cases match option A, arrows from 7 off-grid inputs always land on a valid point, and 11 nearest-point cases are correct.
+- Test: the AF-point screen shows 5 same-size boxes on the thirds, the arrows move as above, and DISPLAY returns to the centre. Check that AF works at each point and that the point survives power-off.
+
 ## 10. Resume here (session ended 2026-09-26)
+
+**Branch `experimental-af5`:** `build/DP2X102.BIN` = the full build with `--af-5` instead of `--af-25` (9.14), SHA-256 `04518854...ce94`. Copied to the SD card 2026-09-26, not yet flashed. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5`. If it's good, update `build/full/DP2X102.BIN` and the README on `main`.
 
 **Branch `experimental-af25`:** `build/DP2X102.BIN` = the experimental-ev build + `--af-25` (9.13, including DISPLAY -> centre), SHA-256 `d616336a...7c85` (6 px side margin around the centre). **Flashed 2026-09-26; the user reports it works.** This is what the camera runs now. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-25`. Rollback: the `experimental-ev` build (`build/DP2X102_test3.BIN`, SHA `1855cdc5...`).
 

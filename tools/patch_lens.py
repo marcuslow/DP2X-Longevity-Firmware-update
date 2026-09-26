@@ -2,7 +2,7 @@
 """Patch Sigma DP2x firmware 1.02 so the lens barrel is not retracted at power-off
 and is not re-homed (retract + extend) at power-on when it is already out.
 
-Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25]
+Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5]
 See NOTES.md for the analysis behind each patch.
 """
 import argparse, hashlib, struct, sys
@@ -124,6 +124,26 @@ AF25_Y = [0, 7, 16, 25, 32]     # 1 unit = 3 LCD px; small box 6.7 units tall, n
 PX, PY, FLAG, MODE = 0x80101dd0, 0x80101dd4, 0x80101dd8, 0x80101ddc
 CURX, CURY = 0x6a02580c, 0x6a025808    # AF-point screen cursor
 
+CENTRE_KEY_SRC = [
+    # key 0x10 on the AF-point screen (raw key 8, DISPLAY; stock: grid <-> free move), jumped to from 0x2d73ba
+    # inside 0x2d730c's frame (mode @(r14,-28)). In grid mode, off-centre: move to the centre by reusing the
+    # stock arrow-key tail at 0x2d779c (erase old rect @(r14,-48), draw new, redraw old, store the point).
+    # At the centre, or in free move: stock mode switch 0x2d75ec.
+    "centre_key",
+    ("ld_r14", -28, 0), ("cmpi", 1, 0), ("bne", "ck_stock"),
+    ("ldi32", CURX, 12), ("ld", 12, 4), ("ldi8", 18, 1), ("cmp", 1, 4), ("bne", "ck_move"),
+    ("ldi32", CURY, 12), ("ld", 12, 0), ("ldi8", 16, 1), ("cmp", 1, 0), ("beq", "ck_stock"),
+    "ck_move",
+    ("ldi32", CURX, 12), ("ld", 12, 4), ("ldi32", 0x25b564, 12), ("call_r", 12), ("sth_r14", -48, 4),
+    ("ldi32", CURY, 12), ("ld", 12, 4), ("ldi32", 0x25b5a2, 12), ("call_r", 12), ("sth_r14", -46, 4),
+    ("ldi8", 0, 4), ("ldi32", 0x25ce1c, 12), ("call_r", 12), ("sth_r14", -44, 4),
+    ("ldi8", 0, 4), ("ldi32", 0x25ce78, 12), ("call_r", 12), ("sth_r14", -42, 4),
+    ("ldi8", 18, 0), ("ldi32", 0x6a025804, 12), ("st", 0, 12),     # new cursor x
+    ("ldi8", 16, 0), ("ldi32", 0x6a025800, 12), ("st", 0, 12),     # new cursor y
+    ("ldi32", 0x2d779c, 12), ("jmp_r", 12),
+    "ck_stock", ("ldi32", 0x2d75ec, 12), ("jmp_r", 12),
+]
+
 AF25_SRC = [
     # frame-size getter 0x21312c: in point-grid mode every point except the centre uses the small frame.
     # AF window, sensor readout, LCD box and sprite all follow this one getter.
@@ -238,24 +258,7 @@ AF25_SRC = [
     ("ldi32", PX, 12), ("st", 10, 12), ("ldi32", PY, 12), ("st", 11, 12),
     ("leave",), ("pop", 11), ("pop", 10), ("pop", 9), ("pop", 8), ("pop", RP), ("ret",),
 
-    # key 0x10 on the AF-point screen (raw key 8, DISPLAY; stock: grid <-> free move), jumped to from 0x2d73ba
-    # inside 0x2d730c's frame (mode @(r14,-28)). In grid mode, off-centre: move to the centre by reusing the
-    # stock arrow-key tail at 0x2d779c (erase old rect @(r14,-48), draw new, redraw old, store the point).
-    # At the centre, or in free move: stock mode switch 0x2d75ec.
-    "centre_key",
-    ("ld_r14", -28, 0), ("cmpi", 1, 0), ("bne", "ck_stock"),
-    ("ldi32", CURX, 12), ("ld", 12, 4), ("ldi8", 18, 1), ("cmp", 1, 4), ("bne", "ck_move"),
-    ("ldi32", CURY, 12), ("ld", 12, 0), ("ldi8", 16, 1), ("cmp", 1, 0), ("beq", "ck_stock"),
-    "ck_move",
-    ("ldi32", CURX, 12), ("ld", 12, 4), ("ldi32", 0x25b564, 12), ("call_r", 12), ("sth_r14", -48, 4),
-    ("ldi32", CURY, 12), ("ld", 12, 4), ("ldi32", 0x25b5a2, 12), ("call_r", 12), ("sth_r14", -46, 4),
-    ("ldi8", 0, 4), ("ldi32", 0x25ce1c, 12), ("call_r", 12), ("sth_r14", -44, 4),
-    ("ldi8", 0, 4), ("ldi32", 0x25ce78, 12), ("call_r", 12), ("sth_r14", -42, 4),
-    ("ldi8", 18, 0), ("ldi32", 0x6a025804, 12), ("st", 0, 12),     # new cursor x
-    ("ldi8", 16, 0), ("ldi32", 0x6a025800, 12), ("st", 0, 12),     # new cursor y
-    ("ldi32", 0x2d779c, 12), ("jmp_r", 12),
-    "ck_stock", ("ldi32", 0x2d75ec, 12), ("jmp_r", 12),
-
+] + CENTRE_KEY_SRC + [
     "TX", ("bytes", bytes(AF25_X)),
     "TY", ("bytes", bytes(AF25_Y)),
 ]
@@ -283,6 +286,123 @@ def af25_patches():
          "grid -> free move: always clamp to the normal-frame range (outer rows are outside it)"),
     ]
 
+# 5 AF points in the point-grid AF mode: the centre plus the four rule-of-thirds intersections, all the stock
+# (normal) box. The image is 2640 x 1760 and 1 grid unit = 32 px across / 24 lines down, so the thirds lines sit
+# 440/32 = 13.75 -> 14 units and 293/24 = 12.2 -> 12 units from the centre. All inside the stock normal-frame
+# range (x 2..34, y 2..30), so frame size, AF window and boot validation stay stock. See NOTES.md 9.14.
+# Arrows: between corners ◀/▶ pick the left/right column and ▲/▼ the top/bottom row; from the centre
+# ▲ top-left, ▶ top-right, ▼ bottom-right, ◀ bottom-left. DISPLAY returns to the centre (centre_key).
+AF5_BASE = AF25_BASE
+AF5_PTS = [(18, 16), (4, 4), (32, 4), (4, 28), (32, 28)]
+
+AF5_SRC = [
+    # next5(r4 = x, r5 = y, r6 = key) -> r4, r5 = new point. Leaf; uses r1.
+    "next5",
+    ("ldi8", 18, 1), ("cmp", 1, 4), ("bne", "n5_corner"),
+    ("ldi8", 16, 1), ("cmp", 1, 5), ("bne", "n5_corner"),
+    ("cmpi", 9, 6), ("beq", "n5_up"), ("cmpi", 12, 6), ("beq", "n5_right"),
+    ("cmpi", 10, 6), ("beq", "n5_down"), ("cmpi", 11, 6), ("beq", "n5_left"),
+    ("ret",),
+    "n5_up",    ("ldi8", 4, 4), ("ldi8", 4, 5), ("ret",),
+    "n5_right", ("ldi8", 32, 4), ("ldi8", 4, 5), ("ret",),
+    "n5_down",  ("ldi8", 32, 4), ("ldi8", 28, 5), ("ret",),
+    "n5_left",  ("ldi8", 4, 4), ("ldi8", 28, 5), ("ret",),
+    "n5_corner",                                   # snap to the nearest corner, then apply the key
+    ("ldi8", 18, 1), ("cmp", 1, 4), ("blt", "n5_xlo"), ("ldi8", 32, 4), ("bra", "n5_xok"),
+    "n5_xlo", ("ldi8", 4, 4),
+    "n5_xok",
+    ("ldi8", 16, 1), ("cmp", 1, 5), ("blt", "n5_ylo"), ("ldi8", 28, 5), ("bra", "n5_yok"),
+    "n5_ylo", ("ldi8", 4, 5),
+    "n5_yok",
+    ("cmpi", 11, 6), ("bne", "n5_k1"), ("ldi8", 4, 4),
+    "n5_k1", ("cmpi", 12, 6), ("bne", "n5_k2"), ("ldi8", 32, 4),
+    "n5_k2", ("cmpi", 9, 6), ("bne", "n5_k3"), ("ldi8", 4, 5),
+    "n5_k3", ("cmpi", 10, 6), ("bne", "n5_k4"), ("ldi8", 28, 5),
+    "n5_k4", ("ret",),
+
+    # x step (from 0x2d7164 in 0x2d7144's frame: x @(r14,8), key @(r14,12)); y from the cursor
+    "navx5",
+    ("ld_r14", 8, 4), ("ldi32", CURY, 12), ("ld", 12, 5), ("ld_r14", 12, 6),
+    ("ldi32", "next5", 12), ("call_r", 12),
+    ("ldi32", 0x2d71e4, 12), ("jmp_r", 12),
+    # y step (from 0x2d720c in 0x2d71ec's frame: y @(r14,8)); x from the cursor
+    "navy5",
+    ("ldi32", CURX, 12), ("ld", 12, 4), ("ld_r14", 8, 5), ("ld_r14", 12, 6),
+    ("ldi32", "next5", 12), ("call_r", 12), ("mov", 5, 4),
+    ("ldi32", 0x2d728c, 12), ("jmp_r", 12),
+
+    # near5(r4 = x, r5 = y) -> r4 = index of the closest point (city-block distance)
+    "near5",
+    ("ldi8", 0, 6), ("ldi8", 0, 7), ("ldi20", 0xfffff, 3),
+    "p5_loop",
+    ("ldi32", "PTX", 13), ("ldub_r13", 6, 0), ("sub", 4, 0),
+    ("cmpi", 0, 0), ("bge", "p5_a"), ("ldi8", 0, 1), ("sub", 0, 1), ("mov", 1, 0),
+    "p5_a",
+    ("ldi32", "PTY", 13), ("ldub_r13", 6, 2), ("sub", 5, 2),
+    ("cmpi", 0, 2), ("bge", "p5_b"), ("ldi8", 0, 1), ("sub", 2, 1), ("mov", 1, 2),
+    "p5_b",
+    ("add", 2, 0), ("cmp", 3, 0), ("bge", "p5_next"), ("mov", 0, 3), ("mov", 6, 7),
+    "p5_next",
+    ("addi", 1, 6), ("cmpi", 5, 6), ("blt", "p5_loop"),
+    ("mov", 7, 4), ("ret",),
+
+    # replaces 0x2d7090 (snap on switching free -> point mode): cursor and stored point = nearest point
+    "snap5",
+    ("push", RP), ("push", 8),
+    ("ldi32", PX, 12), ("ld", 12, 4), ("ldi32", PY, 12), ("ld", 12, 5),
+    ("ldi32", "near5", 12), ("call_r", 12), ("mov", 4, 8),
+    ("ldi32", "PTX", 13), ("ldub_r13", 8, 0),
+    ("ldi32", CURX, 12), ("st", 0, 12), ("ldi32", PX, 12), ("st", 0, 12),
+    ("ldi32", "PTY", 13), ("ldub_r13", 8, 0),
+    ("ldi32", CURY, 12), ("st", 0, 12), ("ldi32", PY, 12), ("st", 0, 12),
+    ("pop", 8), ("pop", RP), ("ret",),
+
+    # replaces 0x2d7010(r4 = selected x, r5 = selected y): draw the 5 frames, the selected one highlighted
+    "ovl5p",
+    ("push", RP), ("push", 8), ("push", 10), ("push", 11),
+    ("mov", 4, 10), ("mov", 5, 11), ("ldi8", 0, 8),
+    "o5_loop",
+    ("ldi32", "PTX", 13), ("ldub_r13", 8, 5), ("ldi32", "PTY", 13), ("ldub_r13", 8, 6),
+    ("ldi8", 0, 4), ("cmp", 10, 5), ("bne", "o5_d"), ("cmp", 11, 6), ("bne", "o5_d"), ("ldi8", 1, 4),
+    "o5_d", ("ldi32", 0x2d6e80, 12), ("call_r", 12),
+    ("addi", 1, 8), ("cmpi", 5, 8), ("blt", "o5_loop"),
+    ("pop", 11), ("pop", 10), ("pop", 8), ("pop", RP), ("ret",),
+
+    # called from 0x2d6f22 (point-mode branch of the eraser 0x2d6f16): erase the 5 frames
+    "erase5p",
+    ("push", RP), ("push", 8), ("enter", 16), ("ldi8", 0, 8),
+    "e5_loop",
+    ("ldi32", "PTX", 13), ("ldub_r13", 8, 4), ("ldi32", 0x25b564, 12), ("call_r", 12), ("sth_r14", -8, 4),
+    ("ldi32", "PTY", 13), ("ldub_r13", 8, 4), ("ldi32", 0x25b5a2, 12), ("call_r", 12), ("sth_r14", -6, 4),
+    ("ldi8", 0, 4), ("ldi32", 0x25ce1c, 12), ("call_r", 12), ("sth_r14", -4, 4),
+    ("ldi8", 0, 4), ("ldi32", 0x25ce78, 12), ("call_r", 12), ("sth_r14", -2, 4),
+    ("ldi8", 1, 4), ("ldi8", 1, 5), ("mov", 14, 6), ("addi", -8, 6),
+    ("ldi32", 0x3a7d60, 12), ("call_r", 12),
+    ("addi", 1, 8), ("cmpi", 5, 8), ("blt", "e5_loop"),
+    ("leave",), ("pop", 8), ("pop", RP), ("ret",),
+] + CENTRE_KEY_SRC + [
+    "PTX", ("bytes", bytes(x for x, _ in AF5_PTS)),
+    "PTY", ("bytes", bytes(y for _, y in AF5_PTS)),
+]
+
+def af5_patches():
+    code, L = assemble(AF5_SRC, AF5_BASE)
+    assert AF5_BASE + len(code) <= 0x27f6b2, "af-5 code overflows the cave"
+    def jmp(label):
+        return assemble([("ldi32", L[label], 12), ("jmp_r", 12)], 0)[0].hex()
+    erase_call = assemble([("ldi32", L["erase5p"], 12), ("call_r", 12), ("bra", 0x2d7008)], 0x2d6f22)[0].hex()
+    return [
+        ("af5-cave",      AF5_BASE, None, code.hex(),
+         f"cave: 5-point (centre + thirds) code + tables ({len(code)} B, ends {AF5_BASE + len(code):#x})"),
+        ("af5-overlay",   0x2d7010, "8e0c17810f05c000", jmp("ovl5p"), "3x3 frame overlay -> 5 points"),
+        ("af5-snap",      0x2d7090, "17810f06cec49784", jmp("snap5"), "snap to 3x3 grid -> nearest of 5 (also stores it)"),
+        ("af5-erase",     0x2d6f22, "c0007fe06fe0a830eb3c", erase_call, "erase 3x3 frames -> 5"),
+        ("af5-nav-x",     0x2d7164, "c1005fe0c0203fd0", jmp("navx5"), "arrows: centre/thirds navigation (x)"),
+        ("af5-nav-y",     0x2d720c, "c0e05fe0c0203fd0", jmp("navy5"), "arrows: centre/thirds navigation (y)"),
+        ("af5-centre-key", 0x2d73bc, "002d75ec", f"{L['centre_key']:08x}",
+         "AF-point screen DISPLAY (key 0x10): off-centre -> jump to centre, else stock grid/free switch"),
+    ]
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inp"); ap.add_argument("out")
@@ -298,7 +418,11 @@ def main():
                     help="extra exposure bias in Evaluative metering only, e.g. -0.5 (uses the AFE-gain cave)")
     ap.add_argument("--af-25", action="store_true",
                     help="AF-point grid mode: 25 points (5x5), centre normal size, the rest small; DISPLAY jumps to the centre (uses the cave)")
+    ap.add_argument("--af-5", action="store_true",
+                    help="AF-point grid mode: 5 points (centre + rule-of-thirds), stock size; DISPLAY jumps to the centre")
     a = ap.parse_args()
+    if a.af_25 and a.af_5:
+        sys.exit("--af-25 and --af-5 are alternatives (same cave space)")
     d = bytearray(open(a.inp, "rb").read())
     if d[:16] != b"SIGMA.CO0000DP2X" or d[0x10:0x1b] != b"1.02.0.0001" or len(d) != 0x804080:
         sys.exit("not a DP2x 1.02 firmware image")
@@ -316,7 +440,9 @@ def main():
         todo += eval_bias_patches(a.eval_bias)
     if a.af_25:
         todo += af25_patches()
-    if a.eval_bias or a.af_25:
+    if a.af_5:
+        todo += af5_patches()
+    if a.eval_bias or a.af_25 or a.af_5:
         o = off(CAVE_LO)
         if hashlib.sha256(d[o:off(CAVE_HI)]).hexdigest() != CAVE_STOCK_SHA:
             sys.exit("code cave 0x27ea2e-0x27f8e3 is not stock")
