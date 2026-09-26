@@ -2,7 +2,7 @@
 """Patch Sigma DP2x firmware 1.02 so the lens barrel is not retracted at power-off
 and is not re-homed (retract + extend) at power-on when it is already out.
 
-Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count]
+Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200]
 See NOTES.md for the analysis behind each patch.
 """
 import argparse, struct, sys
@@ -45,6 +45,21 @@ SHUTTER_COUNT = [
      "long version format string: [SN:%08d] -> Shots:%d"),
 ]
 
+# ISO choices limited to Auto/50/100/200 (setting values 0..3; 4..7 = 400..3200).
+# Both option tables live in the .data image (flash 0xc0000 -> RAM 0x6a018184 at boot).
+# QS menu:   item @0xc7140 (count u16 at +0x14), 16-byte option records @0xc73f0.
+# MENU grid: item @0xc9308 (count u16 at +0x18), 0x2c-byte option records @0xca3cc whose
+#            +0x20 = (up, down) and +0x24 = (left, right) link to other option indices.
+#            Rewired so Auto/50/100/200 form a closed 2x2 grid. See NOTES.md 9.8.
+ISO_MAX_200 = [
+    ("iso-qs-count",   0xc7154, "0008", "0004", "QS ISO item: 8 -> 4 options (Auto, 50, 100, 200)"),
+    ("iso-menu-count", 0xc9320, "0008", "0004", "MENU ISO item: 8 -> 4 options"),
+    ("iso-menu-auto",  0xca3ec, "0007000200070001", "0003000200030001", "MENU Auto: up 3200->200, left 3200->200"),
+    ("iso-menu-50",    0xca418, "0006000300000002", "0002000300000002", "MENU 50: up 1600->100"),
+    ("iso-menu-100",   0xca444, "0000000400010003", "0000000100010003", "MENU 100: down 400->50"),
+    ("iso-menu-200",   0xca470, "0001000500020004", "0001000000020000", "MENU 200: down 800->Auto, right 400->Auto"),
+]
+
 def af_refine_patches(n):
     """AF refine pass restarts n focus steps past the coarse peak (stock 16), see NOTES.md 9.6."""
     if not 1 <= n <= 16:
@@ -65,6 +80,8 @@ def main():
                     help="EXPERIMENTAL: start the AF refine re-scan N steps past the peak instead of 16")
     ap.add_argument("--shutter-count", action="store_true",
                     help="show the shutter count on the setup-menu version line (replaces the serial number)")
+    ap.add_argument("--iso-max-200", action="store_true",
+                    help="QS and MENU offer only ISO Auto/50/100/200 (set ISO to one of these before flashing)")
     a = ap.parse_args()
     d = bytearray(open(a.inp, "rb").read())
     if d[:16] != b"SIGMA.CO0000DP2X" or d[0x10:0x1b] != b"1.02.0.0001" or len(d) != 0x804080:
@@ -77,6 +94,8 @@ def main():
         todo += af_refine_patches(a.af_refine)
     if a.shutter_count:
         todo += SHUTTER_COUNT
+    if a.iso_max_200:
+        todo += ISO_MAX_200
     for name, addr, old, new, desc in todo:
         o = off(addr); old, new = bytes.fromhex(old), bytes.fromhex(new)
         if d[o:o+len(old)] != old:

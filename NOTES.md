@@ -201,13 +201,27 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - To roll back: flash `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed to `DP2X102.BIN`.
 - **2026-09-26: `DP2X102_test.BIN` flashed. Shutter count works:** the version screen shows `Shots:<n>`. AF refine-8 test in progress.
 
+### 9.8 ISO choices limited to Auto/50/100/200 (`--iso-max-200`)
+- ISO setting: `0x80101d48`. Values: 0 = Auto, 1 = 50, 2 = 100, 3 = 200, 4 = 400, 5 = 800, 6 = 1600, 7 = 3200.
+  - Getter `0x2121da`, setter `0x21227a`, applied via `0x21b886`/`0x21bc20` -> `0x3871cc` ("ISO SET").
+  - In some modes the setter forces 0 -> 2 (no Auto in M), and 6/7 -> 5 outside one mode (1600/3200 RAW-only).
+- Menu tables are in the .data image: boot copies flash `0xc0000` (0x12dcc bytes) to RAM `0x6a018184` (`0x2030a4`).
+- **QS menu:** page pointers at RAM `0x6a01f24c`. Page 0 starts with the ISO item at flash `0xc7140` (0x1c bytes: 3 draw fns, set, get, u16 count @+0x14, options ptr @+0x18). Options are 16-byte records at `0xc73f0` (value, 3 draw fns). The QS screen (`0x2c6448`) draws `count` options centred in 8 slots, and cycling wraps at `count`. Patch: count 8 -> 4.
+- **MENU grid:** item at flash `0xc9308` (0x20 bytes: title, help strings, options ptr, u16 count @+0x18, get, set, flags). Options are 0x2c-byte records at `0xca3cc`: +8 value, +0x14 column, +0x18 row, +0x1c enabled, +0x20 (up, down), +0x24 (left, right) option-index links. Patch: count 8 -> 4, and relink Auto/50/100/200 into a closed 2x2 grid (same wrap style as stock).
+- Set ISO to Auto/50/100/200 **before** flashing, so the stored value is one the menus still list.
+- Auto-ISO behaviour and the ISO the camera applies internally are unchanged. Only the choices offered change.
+- **2026-09-26: flashed in `build/DP2X102_test2.BIN`. Works:** QS and MENU offer only Auto/50/100/200.
+
 ## 10. Resume here (session ended 2026-09-26)
 
-**On the camera now:** `build/DP2X102_test.BIN` (lens patch + `--af-refine 8` + `--shutter-count`). Rollback: `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed `DP2X102.BIN` on the card root.
+**On the camera now:** `build/DP2X102_test2.BIN` (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`), SHA-256 `4dd5735f...c4ac`.
+Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102_test2.BIN --af-refine 8 --shutter-count --iso-max-200`.
+Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed `DP2X102.BIN` on the card root.
 
 **Status**
 - Lens patch: done, confirmed (section 7).
 - Shutter count on the version screen: done, confirmed (9.1, 9.7).
+- ISO choices limited to Auto/50/100/200: done, confirmed (9.8).
 - AF refine 16 -> 8: **testing in progress.** The user is comparing AF speed and sharpness (close-up f/2.8, distant, dim; about 5 tries each; slow-motion video for timing).
 
 **Next steps, depending on the AF result**
