@@ -320,10 +320,11 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 
 ## 10. Resume here (session ended 2026-09-26)
 
-**`main` has everything (merged from `experimental-affb`, 2026-09-26).**
-- `build/DP2X102.BIN` = the lens-only public download (SHA `1c3a2fb5...`, `patch_lens.py` with no options).
-- `build/full/DP2X102.BIN` = the full public download (SHA `7cb9fb81...`): `--af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.
-- Keep both reproducible from `tools/patch_lens.py`. On the experiment branches, `build/DP2X102.BIN` is the full build instead.
+**`main` has everything (merged from `experimental-affb`, 2026-09-26).** Public downloads:
+- `build/DP2X102.BIN` = the main download with all features (SHA `7cb9fb81...`): `--af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.
+- `build/lens/DP2X102.BIN` = the alternative, lens patch + shot counter (SHA `8d11c482...`): `--shutter-count`. This exact combination hasn't been flashed, but both parts are proven on the camera.
+- The old lens-only-without-counter build (SHA `1c3a2fb5...`) is no longer offered; `patch_lens.py` with no options still rebuilds it.
+- Keep both downloads reproducible from `tools/patch_lens.py`. On the experiment branches, `build/DP2X102.BIN` is the full build too.
 
 **Branch `experimental-affb`:** `build/DP2X102.BIN` = the af5 full build + `--af-fallback` (9.15), SHA-256 `7cb9fb81...f231`. Copied to the SD card 2026-09-26, not yet flashed. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.
 

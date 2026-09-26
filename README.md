@@ -2,13 +2,8 @@
 
 Modified firmware for the **Sigma DP2x** camera. The lens stays out when you turn
 the camera off, so the lens motor and gears don't have to push it in and out every
-time you use the camera.
-
-There are two versions to choose from:
-
-- **Lens-only**: just the lens change above.
-- **Full**: the lens change plus extra features (shot counter, rule-of-thirds focus points and more; see
-  [Full version: extra features](#full-version-extra-features)).
+time you use the camera. It also adds a shot counter, rule-of-thirds focus points,
+better focusing in dim light and a few other improvements (see [What changes](#what-changes)).
 
 > [!WARNING]
 > **PLEASE READ BEFORE USING. NO WARRANTY. USE ENTIRELY AT YOUR OWN RISK.**
@@ -29,8 +24,7 @@ There are two versions to choose from:
 > - never turn the camera off, open the battery or card door, or take the card out
 >   while the update is running.
 >
-> Both versions have been tested on **one** camera so far. The full version changes more of
-> the camera, so treat it as more experimental. It is provided "AS IS", WITHOUT
+> It has been tested on **one** camera so far. It is provided "AS IS", WITHOUT
 > WARRANTY OF ANY KIND. If you are not comfortable with the risk, please don't use it.
 
 ## What changes
@@ -40,39 +34,51 @@ There are two versions to choose from:
 | Turning the camera **off** | Lens goes back in | **Lens stays out.** The camera also turns off faster |
 | Turning the camera **on** (lens already out) | Lens goes all the way in, then back out | **Lens doesn't move** |
 | Turning the camera **on** (lens in) | Lens comes out, and warns you if the lens cap is on | Same as before |
-| Autofocus | Works normally | Same. You may hear a short focus-motor sound at switch-on; that's normal |
+| Focus motor at switch-on | Resets with a short sound | Same; that sound is normal |
 | Leaving the camera in **playback** for a long time | Lens goes back in | Same as before |
+
+### Other changes
+
+- **Shot counter.** The version screen in the setup menu shows how many pictures the camera
+  has taken (**Shots: n**) instead of the serial number.
+- **ISO choices: Auto, 50, 100, 200.** The higher settings are removed from the menus,
+  leaving the ones that give the cleanest pictures.
+- **Evaluative metering 1/2 stop darker.** In Evaluative metering, pictures come out
+  1/2 stop darker to protect highlights. Your EV compensation still works on top, and the
+  screen still shows 0. The other metering modes are unchanged.
+- **5 focus points on the rule of thirds.** Instead of 9 points, there's the centre plus the
+  four rule-of-thirds points, all the normal box size. From the centre, ▲ goes to top-left,
+  ▶ top-right, ▼ bottom-right and ◀ bottom-left. Between the corners, ◀ ▶ switch left/right
+  and ▲ ▼ switch top/bottom.
+- **DISPLAY returns to the centre point.** On the focus-point screen, DISPLAY jumps back to
+  the centre box. Press it again on the centre to switch to free-move mode, as before.
+- **Shorter focus check.** After finding the sharpest point, the lens re-checks focus from
+  8 steps past it instead of 16, so it moves less.
+- **Autofocus in dim light.** If focus can't be confirmed, the lens goes to the sharpest
+  position seen during the focus scan, instead of stopping at a guess. The box still shows
+  red, so you know it's a best guess.
 
 Everything else in the camera works as normal. The update is based on Sigma's
 DP2x firmware **version 1.02**.
 
-## Full version: extra features
-
-Everything in the lens-only version, plus:
-
-| Feature | Original Sigma firmware | Full version |
-|---|---|---|
-| **Shot counter** | The version screen in the setup menu shows the serial number | It shows how many pictures the camera has taken (**Shots: n**) |
-| **ISO choices** | Auto, 50, 100, 200, 400, 800, 1600, 3200 | **Auto, 50, 100, 200** only (the settings that give the cleanest pictures) |
-| **Autofocus** | Checks focus again from 16 steps past the sharpest point | Checks again from 8 steps past, so the lens moves less |
-| **Evaluative metering** | Meters normally | Pictures come out **1/2 stop darker**, to protect highlights. Only in Evaluative; your EV compensation still works on top, and the screen still shows 0 |
-| **Focus points** | 9 points (3 x 3) | **5 points:** the centre plus the four rule-of-thirds points, all the normal box size. From the centre, ▲ goes to top-left, ▶ top-right, ▼ bottom-right and ◀ bottom-left; between the corners, ◀ ▶ switch left/right and ▲ ▼ switch top/bottom |
-| **Back to the centre point** | Not available | On the focus-point screen, **DISPLAY** jumps back to the centre box. Press it again on the centre to switch to free-move mode (the original DISPLAY action) |
-| **Autofocus in dim light** | If focus can't be confirmed, the lens stops wherever the scan's last estimate was | If focus can't be confirmed, the lens goes to the **sharpest position seen** during the scan. The box still shows red, so you know it's a best guess |
-
-**Before installing the full version:**
+**Before installing the main download:**
 
 - **Set ISO to Auto, 50, 100 or 200 first.** The menus only offer those settings afterwards.
-- **Know the trade-off.** Sigma's factory service calibration tool (used for repairs over USB) can't run
-  with the full version installed, because its space in the firmware now holds the new
+- **Know the trade-off.** Sigma's factory service calibration tool (used for repairs over USB)
+  can't run with this firmware installed, because its space in the firmware now holds the new
   features. Your camera's own calibration is still used as normal. Installing the original
   Sigma firmware brings the tool back.
 
 ## How to install
 
-1. **Download one update file.** Both are called **DP2X102.BIN**; that's the name the camera needs.
-   - **Lens-only:** [**DP2X102.BIN**](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/raw/main/build/DP2X102.BIN)
-   - **Full (lens + extra features):** [**DP2X102.BIN**](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/raw/main/build/full/DP2X102.BIN)
+1. **Download the update file:**
+   [**DP2X102.BIN**](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/raw/main/build/DP2X102.BIN)
+   (all the features above).
+
+   **Only want the lens change and the shot counter?** Download this one instead:
+   [**DP2X102.BIN** (lens + shot counter)](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/raw/main/build/lens/DP2X102.BIN).
+   It keeps everything else exactly as Sigma made it: all ISO settings, 9 focus points and
+   normal metering. You also don't need to change the ISO before installing it.
 2. **Fully charge** the camera battery.
 3. **Format** your SD card in the camera. This erases the card, so save your pictures first.
 4. Put the card in your computer and copy **DP2X102.BIN** onto it. Put it on the
@@ -114,8 +120,6 @@ as normal.
 Download the official **DP2x firmware 1.02** from SIGMA's support website and
 install it the same way. The camera will then behave exactly as it did before.
 
-To switch between the lens-only and full versions, just install the other file the same way.
-
 ## Good to know
 
 - **The lens now stays out when the camera is off.** Handle and store the camera
@@ -133,4 +137,4 @@ To switch between the lens-only and full versions, just install the other file t
 
 ---
 
-<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). Both downloads are built from Sigma's `dp2x102.bin` with `tools/patch_lens.py`. The lens-only build uses no options; the full build uses `--af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.</sub>
+<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). Both downloads are built from Sigma's `dp2x102.bin` with `tools/patch_lens.py`: the main one with `--af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`, the lens + shot counter one with `--shutter-count`.</sub>
