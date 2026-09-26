@@ -178,6 +178,8 @@ Static analysis only. Nothing below is patched or tested unless stated.
 - **Chosen cave: factory AFE-gain tuning routine `0x27eb4e`-`0x27f405` (2232 bytes).** All references into it are its own internal jump targets, plus the call sites `0x27f4ca`/`0x27f5c6` inside `0x27f6b2` ("AFE Gain Adjustment Start"). The only entry chain is the service USB command dispatcher (`0x24e054` -> `0x252224` -> `0x27df8c` -> `0x27cc86` -> `0x27f6b2`). No data pointers into it anywhere in the image.
   - To use it: also neutralise the entry (make `0x27f6b2` return early), so a service tool can't jump into the new code.
   - Cost: Sigma's factory AFE gain adjustment over USB won't work with this firmware. Flashing stock restores it.
+  - **Full dead block once `0x27f6b2` returns at once (checked 2026-09-26):** `0x27ea2e`-`0x27f8e3` (3766 bytes) = `0x27ea2e` (288 B), `0x27eb4e` (2232 B), `0x27f406` (196 B), `0x27f4ca` (488 B) and the `0x27f6b2` body (562 B). Every call into these comes from `0x27f6b2`'s own body. The only reference from outside is `0x27cfcc` `ldi:32 0x27f6b2`, and there are no raw pointers into the range.
+  - Allocation: `0x27eb4e`-`0x27eb85` eval-bias (56 B). Free: `0x27ea2e`-`0x27eb4d` (288 B), `0x27eb86`-`0x27f6b1` (2860 B), `0x27f6b4`-`0x27f8e3` (560 B). About 3.7 KiB in total. Keep `0x27f6b2` = `ret`.
 
 ### 9.6 AF refine pass, in detail
 - State machine `0x284114` on `0x80150fac`: 1 = coarse scan (`0x283842`), 2 = refine (`0x283776`), 3 = `0x283822`. Context struct at `0x80150fa4` (0x5a4 bytes):
@@ -228,7 +230,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - AE mode `0x6a019628` is written only by `0x38674c`, and only from the metering setting (`0x214004`..., `0x21b922`...). So 0 always means Evaluative.
 - Implemented as `--eval-bias EV` (9.11).
 
-### 9.11 Evaluative auto-bias (`--eval-bias -0.5`, branch `experimental-ev`, not yet flashed)
+### 9.11 Evaluative auto-bias (`--eval-bias -0.5`, branch `experimental-ev`, flashed 2026-09-26, working)
 - Both AE target functions have the same 10-byte sequence at `0x38976c` / `0x389ac0`: `call 0x38968c` (meter) followed by the start of the EV-comp block. Each is replaced with `ldi:32 0x27eb4e,r12; call @r12; bra <epilogue>` (the old `beq` to the epilogue becomes a `bra`). The rest of the old EV-comp code is left in place but is never reached.
 - Cave routine at `0x27eb4e` (56 bytes): calls the meter, applies EV comp exactly as stock (r8 = AE struct, r9 = EV table, both still set up by the caller), then, if `[0x6a019628] == 0`, adds `ldi:20 0x8000` (0.5 EV in 16.16) to r4. Positive `--eval-bias` values use `sub` instead.
 - `0x27f6b2` (factory AFE-gain adjust entry, return value unused by `0x27cc86`) starts with `ret`, so the service command can't run the overwritten code (9.5).
@@ -237,7 +239,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 
 ## 10. Resume here (session ended 2026-09-26)
 
-**Branch `experimental-ev`:** `build/DP2X102.BIN` here is the full build (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200` + `--eval-bias -0.5`), SHA-256 `1855cdc5...4f73`. It's the same file as `build/DP2X102_test3.BIN`. Copy `build/DP2X102.BIN` straight to the card root. On this branch it is always the build to flash. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5`. Not yet flashed. Test: same scene, same EV comp, Evaluative vs Center Weighted. Evaluative should come out about 1/2 stop darker (compare the shutter speed shown on half-press). Also check that M mode and the AF are OK.
+**Branch `experimental-ev`:** `build/DP2X102.BIN` here is the full build (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200` + `--eval-bias -0.5`), SHA-256 `1855cdc5...4f73`. It's the same file as `build/DP2X102_test3.BIN`. Copy `build/DP2X102.BIN` straight to the card root. On this branch it is always the build to flash. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5`. **Flashed 2026-09-26. The user reports the EV bias seems to be working.** Still to check: M-mode meter offset in Evaluative, and the AF refine result.
 
 **On the camera now:** `build/DP2X102_test2.BIN` (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`), SHA-256 `4dd5735f...c4ac`.
 Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102_test2.BIN --af-refine 8 --shutter-count --iso-max-200`.
