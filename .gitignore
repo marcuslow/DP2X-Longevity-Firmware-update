@@ -6,3 +6,5 @@ __pycache__/
 # Untested variant (build with --also-playback)
 build/DP2X102_all.BIN
 .DS_Store
+# Sigma fp firmware (different camera, not part of this project) and its scratch files
+/sigma FP/

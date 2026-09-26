@@ -302,7 +302,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - Verified by running the built image bytes of `next5` and `near5` on a small FR emulator: all 20 point x arrow cases match option A, arrows from 7 off-grid inputs always land on a valid point, and 11 nearest-point cases are correct.
 - Test: the AF-point screen shows 5 same-size boxes on the thirds, the arrows move as above, and DISPLAY returns to the centre. Check that AF works at each point and that the point survives power-off.
 
-### 9.15 AF fallback to the sharpest position seen (`--af-fallback`, branch `experimental-affb`, not yet flashed)
+### 9.15 AF fallback to the sharpest position seen (`--af-fallback`, flashed 2026-09-26, working)
 - User test: a person at about 0.7 m, dim light (-3 EV metered, f/2.8, ISO 200, 1/5 s), normal AF, no AF-assist lamp. AF kept failing, although in MF the peak is clearly visible on the LCD.
 - How AF ends (from a read-only analysis, spot-checked):
   - `0x38b090(r)`: 1 = success (green), 2 = failure (red). Then the finish state `0x2842f6` moves the lens to `0x8015153e` (coarse state, `0x80150fac` = 1) or `0x80151542` (refine state 2), through `0x283df6(p)`, which moves to -p. Positions are kept negated.
@@ -326,7 +326,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - The old lens-only-without-counter build (SHA `1c3a2fb5...`) is no longer offered; `patch_lens.py` with no options still rebuilds it.
 - Keep both downloads reproducible from `tools/patch_lens.py`. On the experiment branches, `build/DP2X102.BIN` is the full build too.
 
-**Branch `experimental-affb`:** `build/DP2X102.BIN` = the af5 full build + `--af-fallback` (9.15), SHA-256 `7cb9fb81...f231`. Copied to the SD card 2026-09-26, not yet flashed. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.
+**Branch `experimental-affb`:** `build/DP2X102.BIN` = the af5 full build + `--af-fallback` (9.15), SHA-256 `7cb9fb81...f231`. **Flashed 2026-09-26; the user reports the dim-light fallback works.** Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`.
 
 **Branch `experimental-af5`:** `build/DP2X102.BIN` = the full build with `--af-5` instead of `--af-25` (9.14), SHA-256 `04518854...ce94`. **Flashed 2026-09-26; the user reports it works.** This is what the camera runs now, and `main`'s `build/full/DP2X102.BIN`. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5`.
 
@@ -345,7 +345,8 @@ Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `main`'s `build/DP2X
 - AF refine 16 -> 8: **done, accepted.** The user tested it on the camera and is happy with it (2026-09-26). It stays in the build.
 - Evaluative -0.5 EV bias: done, working (9.11).
 - 25-point AF grid with DISPLAY -> centre: done, working (9.13), then replaced by:
-- 5-point AF (centre + rule of thirds) with DISPLAY -> centre: done, working (9.14). It is the public full build.
+- 5-point AF (centre + rule of thirds) with DISPLAY -> centre: done, working (9.14).
+- AF fallback to the sharpest position seen: done, working in dim light (9.15). The main download has all of the above.
 
 **AF: no further work planned.** Ideas kept for reference only:
 - Option C, skipping the refine pass entirely (straight to the interpolated coarse peak, approached from the same side). It would need injected code in the cave (9.5).
