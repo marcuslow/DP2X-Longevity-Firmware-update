@@ -8,3 +8,7 @@ build/DP2X102_all.BIN
 .DS_Store
 # Sigma fp firmware (different camera, not part of this project) and its scratch files
 /sigma FP/
+# Sigma DP1/DP2 original firmware (download from Sigma) and the DP2 disassembly (rebuild with tools/disasm.sh)
+/sigma DP1/
+/sigma DP2/
+work-dp2/
