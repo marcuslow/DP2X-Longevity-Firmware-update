@@ -237,13 +237,61 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
 - Not affected: the `0x6a019698` override path, the non-metered path (`+0x2c != 1`), and AF's direct meter reads via `0x38a084`. The EV comp shown on screen is unchanged. The bias is hidden.
 - Possible side effect: in M mode, if the exposure meter uses this target, it will read 0.5 EV off in Evaluative. Check on the camera.
 
+### 9.12 AF point layout
+- The point is stored as grid coordinates, not an index. x and y are u32 at RAM `0x80101dd0`/`0x80101dd4` (get `0x2130e4`, set `0x21310a`). The centre is (18, 16).
+- Mode is at `0x80101ddc` (get `0x21316e`): 1 = 9-point, 2 = free move. Free move is stock; key 0x10 on the AF-point screen switches mode (`0x2d75ec`).
+- Frame size flag is at `0x80101dd8` (get `0x21312c`, 22 callers; toggled by `0x2d78a0`): 0 = normal, 1 = small. It is global; no point has its own size.
+- Boot validation `0x271a2c` (`0x271ec0`-`0x271f66`): mode must be 1 or 2, size 0 or 1. x and y must be in 2..34 (normal frame) or 0..36 (small), otherwise the point resets to the centre.
+- Sensor readout window `0x243b98`/`0x243d8e`:
+  - Horizontal start = base - (x-18)*32. Base is `0x3f4` normal, `0x48a` small.
+  - Vertical start = base - (y-16)*24 lines. Base is `0x2af` normal, `0x2ff` small.
+- Contrast (HPF) window `0x283514` "SetHpfWindowSize": the size comes from .data templates chosen in `0x38a908` by mode and the size flag. One window per frame; 3 contrast values.
+- LCD mapping:
+  - `0x25b564`: lcd_x = (x-18)*4 + 140 (+8 for the small frame). `0x25b5a2`: lcd_y = (y-16)*3 + 92 (+6 small). So 1 unit = 4 px horizontally, 3 px vertically.
+  - Normal frame 42x32 px = 10.5 x 10.7 units, sprites `0x4b7d1c`/`0x4b825c`. Small frame 26x20 px = 6.5 x 6.7 units, sprites `0x4b879c`/`0x4b89a4`.
+- Navigation is arithmetic (`0x2d7144` x, `0x2d71ec` y; keys 9/10/11/12 = up/down/left/right).
+  - 9-point mode steps x by 16 and y by 14, clamped to 2..34 and 2..30.
+  - Free mode steps by 1, clamped to the same range, or 0..36 x 0..32 with the small frame.
+  - The 3x3 overlay loop is at `0x2d7010`; snapping to the grid is at `0x2d7090`.
+- About 29 readers of (x, y): half-press AF, live-view frame, EXIF (`0x215d3a`), `0x38b0d8`, and `0x248280` (special-cases the centre; purpose unknown). They all accept any in-range point, since free move already feeds them one.
+- Design for 25 points (the user asked for a 5x5 grid, centre box stock size, the others smaller, half-box gaps):
+  - Make `0x21312c` return "small" when mode = 1 and the point isn't the centre. That switches the window, readout, LCD box and sprite together.
+  - Replace the mode-1 step logic, the overlay loop and the snapping with 5-entry position tables. About 400-600 B of cave code.
+  - Half-box gaps put the rings at offsets +-12 and +-22 units on both axes, beyond the stock small-frame limits (+-18 x, +-16 y).
+  - Inside the stock limits the gaps shrink to about 6 px horizontally and 1 px vertically.
+
+### 9.13 25-point AF grid (`--af-25`, branch `experimental-af25`, flashed 2026-09-26, working)
+- The "9-point" AF-point mode becomes a 5x5 grid: x in {1, 8, 18, 28, 35}, y in {0, 7, 16, 25, 32}. The user asked for a 3x margin around the centre. That works at the sides only; a vertical margin would push the outer rows past the stock range (0..32), so it was declined.
+  - The centre (18, 16) keeps the normal box (or small, if the frame-size setting is small). The other 24 always use the stock small box.
+  - On screen: 6 px between the centre box and its left/right neighbours, 2 px between other boxes horizontally, 1 px vertically, no overlaps. The grid spans LCD x 80-242, y 50-166 (stock 3x3: 76-246, 50-166).
+  - Every position is inside the stock free-move small-frame range (0..36 x 0..32), so the sensor and AF window never go anywhere stock can't.
+- Code: 796 B at `0x27eb86`-`0x27eea1` in the cave, assembled by `tools/fr_asm.py` (its encodings were checked against 36 known instructions and the objdump output).
+- Hooks, each an 8-byte `ldi:32 ; jmp @r12` unless noted:
+  - `0x21312c` size getter: mode 1 and not the centre returns small. None of its 22 callers relies on r0/r1 across the call.
+  - `0x2d6e80` frame draw: wrapped so the stored point is set to the drawn frame while drawing, so each frame gets its own size.
+  - `0x2d7010` overlay: 5x5 loop.
+  - `0x2d7090` snap: nearest grid point; it now also stores the point (stock stored only the cursor).
+  - `0x2d6f22` erase: 10 bytes, `call` to the 5x5 erase, then `bra 0x2d7008`.
+  - `0x2d7164`/`0x2d720c` left/right and up/down: next or previous grid value (clamped). Return through the stock epilogues `0x2d71e4`/`0x2d728c`.
+  - `0x2d7622` `bne` -> `nop`: switching grid -> free move always clamps to the normal-frame range, since rows y=0 and y=32 are outside it.
+- **DISPLAY returns to the centre.**
+  - The AF-point screen gets raw keys through `0x2d6522`, which translates them: 3/4 -> 5, 5 -> 8, 6 -> 0xa (down), 7 -> 6/0x28, 8 -> 0x10, 9 -> 0xc (right), 10 MENU -> 6/3, 11 -> 0xb (left), 12/13 -> frame size small/normal (the up/down buttons), 14 -> 9 (up), 15 -> 0x26/2.
+  - Raw 8 is almost certainly DISPLAY: its shooting-mode handler `0x26fb90` cycles the display mode (`0x212c76`). On this screen it becomes 0x10, the stock grid <-> free-move switch (`0x2d75ec`).
+  - Patch: the jump target at `0x2d73bc` now points to `centre_key`. In grid mode, off-centre, it builds the old-cursor rect at `(r14,-48)`, sets the new cursor (18, 16) at `0x6a025804`/`0x6a025800` and reuses the stock arrow-key tail `0x2d779c`, which redraws and stores the point. At the centre, or in free move, it runs the stock switch. So pressing DISPLAY a second time still reaches free move.
+- Boot validation (`0x271f0a`) calls the size getter, so non-centre grid points are validated against the small range and survive a restart.
+- No other function needs a hook: an entry search found no alternate entries or raw pointers, and the only jump into a replaced range comes from dead code.
+- Not changed: the mode icon (`0x2d687e`) still shows the stock 9-point icon. Playback/EXIF names only the 9 stock positions.
+- Test: DISPLAY off-centre jumps to the centre, and DISPLAY on the centre switches to free move. The AF-point screen shows 25 boxes, the arrows step one box at a time and stop at the edges, and the selected box is highlighted. Check that AF works at the corners (smaller box) and that the point survives power-off. Switch to free move and back: the point should snap to the grid. Try the frame-size toggle.
+
 ## 10. Resume here (session ended 2026-09-26)
+
+**Branch `experimental-af25`:** `build/DP2X102.BIN` = the experimental-ev build + `--af-25` (9.13, including DISPLAY -> centre), SHA-256 `d616336a...7c85` (6 px side margin around the centre). **Flashed 2026-09-26; the user reports it works.** This is what the camera runs now. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-25`. Rollback: the `experimental-ev` build (`build/DP2X102_test3.BIN`, SHA `1855cdc5...`).
 
 **Branch `experimental-ev`:** `build/DP2X102.BIN` here is the full build (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200` + `--eval-bias -0.5`), SHA-256 `1855cdc5...4f73`. It's the same file as `build/DP2X102_test3.BIN`. Copy `build/DP2X102.BIN` straight to the card root. On this branch it is always the build to flash. Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5`. **Flashed 2026-09-26. The user reports the EV bias seems to be working.** Still to check: M-mode meter offset in Evaluative.
 
-**On the camera now:** `build/DP2X102_test2.BIN` (lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`), SHA-256 `4dd5735f...c4ac`.
+**Previously on the camera:** the experimental-ev build (SHA `1855cdc5...`). The older `build/DP2X102_test2.BIN` (SHA `4dd5735f...c4ac`) = lens patch + `--af-refine 8` + `--shutter-count` + `--iso-max-200`.
 Build: `python3 tools/patch_lens.py dp2x102.bin build/DP2X102_test2.BIN --af-refine 8 --shutter-count --iso-max-200`.
-Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed `DP2X102.BIN` on the card root.
+Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `main`'s `build/DP2X102.BIN` (lens patch only) or stock `dp2x102.bin`, renamed `DP2X102.BIN` on the card root.
 
 **Status**
 - Lens patch: done, confirmed (section 7).
@@ -251,6 +299,7 @@ Rollback: `build/DP2X102_test.BIN` (without the ISO limit), `build/DP2X102.BIN` 
 - ISO choices limited to Auto/50/100/200: done, confirmed (9.8).
 - AF refine 16 -> 8: **done, accepted.** The user tested it on the camera and is happy with it (2026-09-26). It stays in the build.
 - Evaluative -0.5 EV bias: done, working (9.11).
+- 25-point AF grid with DISPLAY -> centre: done, working (9.13).
 
 **AF: no further work planned.** Ideas kept for reference only:
 - Option C, skipping the refine pass entirely (straight to the interpolated coarse peak, approached from the same side). It would need injected code in the cave (9.5).
