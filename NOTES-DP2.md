@@ -135,3 +135,113 @@ old DP2 AF engine's RAM (not yet mapped), or find unused SDRAM.
 
 Risk: the first flash can only be tested on a real DP2. A crash during AF is recoverable only if the updater still runs.
 It runs from the same image, so boot must stay untouched: no hooks on the power-on path.
+
+## 6. Interface map (step 1, done 2026-09-27)
+
+The port has two halves:
+- **Front half (hardware), kept DP2-native:**
+  - sensor AF mode (DP2 `0x37c7e8(1)`, DP2x `0x387310(1)`)
+  - AF readout window
+  - contrast filter window and coefficients (DP2 SetHpfWindowSize `0x27f92a`, called from the mode/UI code
+    `0x37fd7c`/`0x3835dc`/`0x383668`, as on the DP2x)
+- **Back half (algorithm), taken from the DP2x:** task-6 loop, state machine, scan/refine, peak logic,
+  per-frame contrast store, lens-move decisions, the AF library tuning table.
+
+**Motor: use the DP2's own primitives. Don't port the DP2x motor code.**
+- The DP2 already has the non-blocking move.
+  - DP2 `0x381164` == DP2x `0x38ab64` (minus direction, `[0xb000|n, 0x8597]`).
+  - DP2 `0x381350` == DP2x `0x38abf4` (plus direction, `0x85b7`, clamp 364, home-sensor check).
+  - Both wait on flag `0x35` and arm the Timer32 motor-done timer through `0x380fbc` (== DP2x `0x38a64c`).
+  - Its callback `0x380f84` (== DP2x `0x38a614`) sets state 2, sets flag `0x35` and stops the timer.
+  - The DP2 also claims motor power with `0x3836bc(2,0)` ("PowerFace") and releases it on hold.
+- The one DP2x addition: its timer callback also calls `0x38a594`, which during a coarse scan issues the next step
+  from the interrupt (continuous stepping). Port `0x38a594`. Point the callback pointer that `0x380fbc` loads
+  (`ldi:32 0x380f84` at `0x381014`) to a wrapper: call `0x380f84`, then the ported `0x38a594`.
+- DP2x hold `0x38a1a0` (`0x850a|dir<<5` to device 8) is replaced by a new DP2 hold:
+  - wait for flag `0x35`
+  - `0x250c28(8, 0x8517|dir<<5)`
+  - `0x3836bc(2,1)`
+  - motor state byte `0x6a0195b9` = 0
+  This follows the DP2 hold sequence in `0x381048`/`0x381228`.
+- The motor settings stay DP2 (`0x8597`/`0x85b7`, regA `0x11f`) in the first build.
+
+**Code references (DP2x -> DP2):**
+
+| DP2x | DP2 | what |
+|---|---|---|
+| `0x30c21e` | `0x30e724` | AF contrast library (identical) |
+| `0x307da6` | `0x30c6fa` | library per-window call (identical) |
+| `0x30837c` | `0x302e3c` | focus-range/macro getter (`0x8015b99a` -> `0x8015a91a`); check its writer |
+| `0x374dc8` | `0x36a476` | memset(p, v, n) (byte-identical) |
+| `0x387520` | `0x37ca00` | identical |
+| `0x38a084` / `0x38968c` | `0x37eb90` | meter (the DP2x wrapper only calls the meter) |
+| `0x38ab64` / `0x38abf4` | `0x381164` / `0x381350` | focus move -/+ (see above) |
+| `0x38a1a0` | new hold routine | see above |
+| `0x38b000` | ported as-is | AF block re-arm (`[0x40000006] \|= 0x20`) |
+| `0x2525d4`/`0x252650`, `0x2b4xxx` | not needed | only used by DP2x motor code that isn't ported |
+
+**UI calls in the DP2x AF end `0x38b090`: dropped.** On the DP2 the half-press code draws the result itself.
+The twins, for reference:
+
+| DP2x | DP2 |
+|---|---|
+| green frame `0x27007c` | `0x26eec2` |
+| red frame `0x2700a4` | `0x26eeee` |
+| beeps `0x397fd8` / `0x398018` | `0x38ed64` / `0x38ed24` |
+| LED bits `0x238a8a` / `0x238ab0` | `0x382558` / `0x382570` |
+
+The DP2x also calls the AF point xy `0x2130e4` and a flag `0x23941c` there. The DP2 AF point is an index 0-8
+at `0x801018d4` (`0x213068`), not x/y.
+
+**RAM (DP2x -> DP2):**
+- Shared with DP2 lens code:
+  - focus position `0x6a019a78` -> `0x6a0195a4` (word)
+  - motor state `0x6a019a70` (word) -> `0x6a0195b9` (**byte**: rewrite `ld`/`st` to `ldub`/`stb` in
+    `0x38b00c`, `0x38b038`, `0x38b21c`, `0x38a614` code)
+  - init flag `0x6a019a74` (DP2x: 2 = homed) vs DP2 `0x6a0195a0` (1 = homed). Only used inside the move functions,
+    which are not ported.
+- New, allocated in the old AF module's scan buffer `0x801574f4` (0x3254 B):
+  - That buffer is reachable only through `0x304314` (getter), whose only caller is the old engine start
+    `0x2800da`, which is replaced. So nothing can reach it after the port.
+  - Contents: engine context `0x80150f9c-0x80151547` (0x5ac), library params `0x8015528c-0x801552eb` (0x60),
+    lens/task variables `0x6a019a64-0x6a019a8c` (0x2a), `0x6a01b78c`.
+  - The AF-library tuning graph `0x6a01b79c-0x6a01b9fb` (0x260 B, 12 objects with internal pointers) is copied
+    with its pointers fixed up.
+  - The library work buffer `0x6a025980` is still to be sized.
+  - These are .bss, so initialise at task start the ones the DP2x has in .data: window `0x6a019a84`=0x131,
+    `a86`=0x21, `a88`=0x131, last dir `a8c`=1, tuning pointer `0x6a01b798` -> copy of `0x6a01b79c`.
+- Task 6's stack is 0x1600 on both cameras. The per-frame wrapper needs 0x47c plus the library.
+
+**Control interface (DP2x lens task):**
+- `0x38b038` start:
+  - result `0x6a019a68` = 0
+  - wait up to 338 ms while the motor state is 1; if it times out, `0x38b090(2)`
+  - otherwise task state `0x6a019a6c` = 1
+- `0x38b090(r)` end, r = 1 OK / 2 fail / 3 abort:
+  - result = 2 / 1 / 3
+  - `0x38ae80(0)`, then `0x284466(r)`, then task state 3
+- `0x38b188` poll: 2 = busy (task state != 0), else result 2 -> 0 (OK), 1 or 3 -> 1, 0 -> 2.
+- Half-press order on the DP2x: `0x387310(1)`, then engine start `0x28425a`, then `0x206166`/`0x206182` wait,
+  then `0x38b038`, then poll every 1-30 ms. If S1 is released: `0x213cc6()`, `0x38b090(3)`, wait until not busy.
+
+**DP2 hooks (replace three DP2 functions with adapters; the half-press code stays untouched):**
+- `0x37fdfc` start (called once from half-press `0x238750`): ported `0x28425a()`, then ported `0x38b038()`.
+- `0x37fe78` poll (DP2 meaning: 0 = running, >0 = in focus, -1 = failed):
+  ported `0x38b188()` 2 -> 0, 0 -> 1, 1 -> -1.
+  - In focus: in the DP2 9-point auto mode (`0x213014()`==1) the value is a window bitmask, 1<<index
+    (`0x237dcc`). Return the centre, index 4 = `0x10`.
+- `0x37fe5c` abort: ported `0x38b090(3)`.
+- Task-table entry 6 -> ported `0x38b1d4`. DP2 task 6 `0x3817a0` also ran `0x27f7da` and message `0x308392` after
+  each frame for the old module; not needed.
+- In the old block: `0x280254` becomes a `return 0` stub. `0x280acc` (24 B setter) stays.
+
+**Open questions:**
+1. **DP2 9-point auto AF.** The old engine picks the window in focus. The DP2x engine uses one window.
+   Proposal: in auto mode, AF on the centre point. The DP2x has no auto mode.
+   Also check what the DP2 front half does with the window in auto mode.
+2. **Contrast scale.** DP2x thresholds (`B < 30000` = no contrast, `B/8` drop, fallback `min/4`) assume DP2x
+   contrast levels. Compare the DP2 and DP2x HPF coefficient and window templates (`0x27f92a` vs `0x283514` data)
+   before trusting them.
+3. The DP2x per-frame read `0x38af12` waits only for bit `0x20` of `0x40000006`. The DP2 frame wait `0x382100`
+   sets and waits for bits `0x20` **and** `0x08`. Find out what `0x08` is before choosing.
+4. Who writes the macro/range variable `0x8015a91a` on the DP2 (the old engine or the module)?
