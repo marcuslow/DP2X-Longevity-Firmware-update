@@ -7,7 +7,7 @@ time you use the camera.
 There are two versions to choose from:
 
 - **Lens-only**: just the lens change above.
-- **Full**: the lens change plus extra features (shot counter, 25 focus points and more; see
+- **Full**: the lens change plus extra features (shot counter, rule-of-thirds focus points and more; see
   [Full version: extra features](#full-version-extra-features)).
 
 > [!WARNING]
@@ -56,7 +56,7 @@ Everything in the lens-only version, plus:
 | **ISO choices** | Auto, 50, 100, 200, 400, 800, 1600, 3200 | **Auto, 50, 100, 200** only (the settings that give the cleanest pictures) |
 | **Autofocus** | Checks focus again from 16 steps past the sharpest point | Checks again from 8 steps past, so the lens moves less |
 | **Evaluative metering** | Meters normally | Pictures come out **1/2 stop darker**, to protect highlights. Only in Evaluative; your EV compensation still works on top, and the screen still shows 0 |
-| **Focus points** | 9 points (3 x 3), all the same size | **25 points (5 x 5).** The centre box is the normal size, the other 24 are the smaller box, with a wider gap each side of the centre |
+| **Focus points** | 9 points (3 x 3) | **5 points:** the centre plus the four rule-of-thirds points, all the normal box size. From the centre, ▲ goes to top-left, ▶ top-right, ▼ bottom-right and ◀ bottom-left; between the corners, ◀ ▶ switch left/right and ▲ ▼ switch top/bottom |
 | **Back to the centre point** | Not available | On the focus-point screen, **DISPLAY** jumps back to the centre box. Press it again on the centre to switch to free-move mode (the original DISPLAY action) |
 
 **Before installing the full version:**
@@ -132,4 +132,4 @@ To switch between the lens-only and full versions, just install the other file t
 
 ---
 
-<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). The full version is built from branch [`experimental-af25`](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/tree/experimental-af25), which has the full notes and patch script.</sub>
+<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). The full version is built from branch [`experimental-af5`](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/tree/experimental-af5), which has the full notes and patch script.</sub>
