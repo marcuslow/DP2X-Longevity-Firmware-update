@@ -5,7 +5,8 @@ Step 2, the relocator. It copies the DP2x AF code into the dead old-AF block of 
 address in it: ldi:32/ldi:20 constants, call and branch displacements, code-pointer tables. Anything it cannot
 classify is an error. The output is re-disassembled with objdump and compared with the source.
     port_af.py --report      list every relocated reference and the layout
-    port_af.py OUT.bin       write the patched DP2 image (nothing calls the new code until the hooks are in)
+    port_af.py --hooks       disassemble the hook code (step 3)
+    port_af.py OUT.bin       write the patched DP2 image (build/DP2V105.BIN is the flashable name)
 Needs work/ and work-dp2/ from tools/disasm.sh.
 """
 import argparse, bisect, collections, hashlib, os, re, struct, subprocess, sys, tempfile
@@ -23,24 +24,40 @@ OBJDUMP = "/opt/homebrew/opt/binutils/bin/objdump"
 SRC = [(0x283714, 0x284522), (0x2d905e, 0x2d94bc), (0x38a594, 0x38a612), (0x38a7e8, 0x38a854),
        (0x38ad38, 0x38b270)]
 # Entry points the DP2 side will call. Only functions reachable from these are copied.
-ROOTS = [0x28425a, 0x38b038, 0x38b090, 0x38b188, 0x38b1d4, 0x38a594]
+ROOTS = [0x28425a, 0x38b038, 0x38b090, 0x38b188, 0x38b1d4, 0x38a594,
+         0x284448, 0x284490]          # engine step count and state, called from the DP2 hooks
 # Code-pointer tables inside the copied code's reach: address -> number of 32-bit pointers.
 PTR_TABLES = {0x3c0c60: 7}           # switch table of 0x38ad5c
 
 # ---- where it goes (DP2 addresses) ----------------------------------------------------------------------------
 # The old AF engine block 0x27fe04-0x2818f9, around the 24-byte setter 0x280acc that stays live.
 SPACE = [(0x27fe04, 0x280acc), (0x280ae4, 0x2818fa)]
-# Freeing 0x280254 (merges the first two gaps): the NoContrast callback's pointer to it -> the DP2 'return 0'.
-SPACE_PATCHES = [(0x27f6ee, 0x280254, 0x3800c8)]    # (ldi:32 site, old value, new value)
-# The other DP2 references into SPACE (all checked, see NOTES-DP2.md section 7):
+# The other DP2 references into SPACE (all checked, see NOTES-DP2.md section 7). The ones inside HOOK_REGIONS
+# (old AF start 0x37fe30, old task-6 body 0x3817f4/0x381810) are overwritten by the hooks.
 SPACE_OK = {
     0x27fb4a: "in 0x27fac8, whose only reference is 0x2805b4 inside the old engine",
     0x3048ea: "0x280000 is a clamp limit (cmp, then stored as a value)", 0x3048f6: "same",
 }
-SPACE_HOOKED = {                      # dead only once the step-3 hooks are in; no image is written before that
-    0x37fe30: "AF start 0x37fdfc -> old engine start 0x2800da (replaced by the start adapter)",
-    0x3817f4: "old task-6 body 0x3817a0 (task-table entry 6 is repointed)", 0x381810: "same",
-}
+
+# ---- hooks (step 3, NOTES-DP2.md section 8) --------------------------------------------------------------------
+# DP2 functions replaced in place by GEN_ASM blocks (lo, hi, blocks laid out from lo; the rest is zeroed).
+HOOK_REGIONS = [
+    (0x37fdfc, 0x37fe5c, ["af_start"]),     # AF start, called once from the half-press code 0x238254
+    (0x37fe5c, 0x37fe78, ["af_abort"]),     # AF abort on S1 release
+    (0x37fe78, 0x37fed8, ["af_poll"]),      # AF poll: 0 running, -1 failed, else the in-focus window mask
+    (0x3817a0, 0x381890, ["task6", "motor_done", "evt_move", "evt_stop",    # old task-6 body (entry at 0x200090)
+                          "move_minus", "move_plus"]),                        # (no room left in SPACE)
+    (0x3826ec, 0x382734, ["af_wait"]),      # capture sequence 0x27c770: wait for a running AF to end
+]
+# ldi:32 immediates patched: (site, old value, new value or symbol)
+PTR_PATCHES = [
+    (0x27f6ee, 0x280254, 0x3800c8),         # NoContrast callback -> 'return 0' (frees 0x280254 for SPACE)
+    (0x381014, 0x380f84, "motor_done"),     # motor-done timer callback of every DP2 move -> + the DP2x step chain
+    (0x37fc9a, 0x302c98, "evt_move"),       # 0x37fc74 (= DP2x 0x38a854(0)): old-module event + engine state 3
+    (0x37fcda, 0x302c98, "evt_stop"),       # 0x37fcac (= DP2x 0x38a854(1)): old-module event + engine state 0
+    (0x3824c6, 0x302e84, "port:0x284448"),  # positioning 0x3821f4: step count to the new engine, as the DP2x does
+    (0x3824fe, 0x302e84, "port:0x284448"),
+]
 # RAM for the engine's own variables: the old AF module's scan buffer (only reachable from the old engine start).
 NEWRAM = (0x801574f4, 0x801574f4 + 0x3254)
 
@@ -101,7 +118,69 @@ GEN_ASM = {
     # DP2x 0x38ab64 / 0x38abf4 record the direction (in 0x38a144) for the hold; the DP2 moves don't.
     "move_minus": [("ldi32", LASTDIR, 12), ("ldi8", 0, 0), ("stb", 0, 12), ("ldi32", 0x381164, 12), ("jmp_r", 12)],
     "move_plus":  [("ldi32", LASTDIR, 12), ("ldi8", 1, 0), ("stb", 0, 12), ("ldi32", 0x381350, 12), ("jmp_r", 12)],
+
+    # -- hooks (placed by HOOK_REGIONS). "port:X" = ported DP2x address X. -------------------------------------
+    # Start: DP2x half-press order is engine start 0x28425a, then lens start 0x38b038 (the DP2 has already set the
+    # sensor AF mode and waited). 0x6a01959c = 0 and 0x6a019598 = 1 (AF running) as the old start did.
+    # Returns 0 started, 1 busy (the DP2 caller ignores it).
+    "af_start": [
+        ("push", RP),
+        ("ldi32", 0x6a01959c, 12), ("ldi8", 0, 0), ("st", 0, 12),
+        ("ldi32", "port:0x38b188", 12), ("call_r", 12), ("cmpi", 2, 4), ("beq", "s_busy"),
+        ("ldi32", "port:0x28425a", 12), ("call_r", 12),
+        ("ldi32", 0x6a019598, 12), ("ldi8", 1, 0), ("st", 0, 12),
+        ("ldi32", "port:0x38b038", 12), ("call_r", 12),
+        ("ldi8", 0, 4), ("pop", RP), ("ret",),
+        "s_busy", ("ldi8", 1, 4), ("pop", RP), ("ret",),
+    ],
+    # Abort (DP2x 0x38b090(3)), skipped while the capture sequence waits for the AF (0x6a019590), as before.
+    "af_abort": [
+        ("ldi32", 0x6a019590, 12), ("ld", 12, 0), ("cmpi", 0, 0), ("bne", "a_out"),
+        ("ldi8", 3, 4), ("ldi32", "port:0x38b090", 12), ("jmp_r", 12),
+        "a_out", ("ret",),
+    ],
+    # Poll: DP2x 0x38b188 (2 busy, 0 in focus, 1 failed/aborted) -> DP2 0 / mask / -1. The mask and the AF state
+    # 0x6a019598 (0 OK, 3 failed; read by the half-press code for the 'AF failed' flag 0x6a0197a5) are what the
+    # old end setters 0x380f30/0x380f64 left: mask = 0x6a0195b6, or 1 (the centre, index 0) when it is 0x1ff (auto).
+    "af_poll": [
+        ("push", RP),
+        ("ldi32", "port:0x38b188", 12), ("call_r", 12),
+        ("cmpi", 2, 4), ("beq", "p_run"), ("cmpi", 0, 4), ("bne", "p_fail"),
+        ("ldi32", 0x6a019598, 12), ("ldi8", 0, 0), ("st", 0, 12),
+        ("ldi32", 0x6a0195b6, 12), ("lduh", 12, 4), ("ldi20", 0x1ff, 1), ("cmp", 1, 4), ("bne", "p_out"),
+        ("ldi8", 1, 4),
+        "p_out", ("pop", RP), ("ret",),
+        "p_fail", ("ldi32", 0x6a019598, 12), ("ldi8", 3, 0), ("st", 0, 12), ("ldi8", 0xff, 4), ("extsb", 4),
+        ("pop", RP), ("ret",),
+        "p_run", ("ldi8", 0, 4), ("pop", RP), ("ret",),
+    ],
+    # Task 6 entry: zero the new RAM, copy the DP2x .data values (init_data) of the lens/task block, then run the
+    # DP2x task body. It never returns (neither does the DP2x one; the flag-1 stop bit is ignored as there).
+    "task6": [
+        ("ldi32", NEWRAM[0], 4), ("ldi8", 0, 5), ("ldi32", "newram_size", 6), ("ldi32", 0x36a476, 12), ("call_r", 12),
+        ("ldi32", "init_data", 4), ("ldi32", "ram:0x6a019a64", 5), ("ldi32", "init_len", 6),
+        "t_copy", ("ldub", 4, 0), ("stb", 0, 5), ("addi", 1, 4), ("addi", 1, 5), ("addi", -1, 6), ("cmpi", 0, 6),
+        ("bne", "t_copy"),
+        ("ldi32", "port:0x38b1d4", 12), ("jmp_r", 12),
+    ],
+    # Motor-done timer callback: the DP2 one (== DP2x 0x38a614 without its last call), then the DP2x step chain.
+    "motor_done": [("push", RP), ("ldi32", 0x380f84, 12), ("call_r", 12),
+                   ("ldi32", "port:0x38a594", 12), ("call_r", 12), ("pop", RP), ("ret",)],
+    # The rest of DP2x 0x38a854: after the old-module event, engine state 3 (move by the set step count) or 0.
+    "evt_move": [("push", RP), ("ldi32", 0x302c98, 12), ("call_r", 12),
+                 ("ldi8", 3, 4), ("ldi32", "port:0x284490", 12), ("call_r", 12), ("pop", RP), ("ret",)],
+    "evt_stop": [("push", RP), ("ldi32", 0x302c98, 12), ("call_r", 12),
+                 ("ldi8", 0, 4), ("ldi32", "port:0x284490", 12), ("call_r", 12), ("pop", RP), ("ret",)],
+    # Wait for the AF to end (old 0x3826ec waited for 0x6a019598 in {0, 3}): the DP2x busy state, which also covers
+    # the final motor hold. 0x6a019590 = 1 meanwhile, so an abort doesn't cut the AF short.
+    "af_wait": [
+        ("push", RP), ("ldi32", 0x6a019590, 12), ("ldi8", 1, 0), ("st", 0, 12),
+        "w_loop", ("ldi32", "port:0x38b188", 12), ("call_r", 12), ("cmpi", 2, 4), ("bne", "w_done"),
+        ("ldi8", 0xab, 12), ("ldi8", 5, 4), ("extsb", 12), ("int", 0x40), ("nop",), ("bra", "w_loop"),   # dly_tsk(5)
+        "w_done", ("ldi32", 0x6a019590, 12), ("ldi8", 0, 0), ("st", 0, 12), ("pop", RP), ("ret",),
+    ],
 }
+HOOK_BLOCKS = {g for _, _, gs in HOOK_REGIONS for g in gs}
 
 
 class Error(Exception):
@@ -251,6 +330,13 @@ class Port:
             a = (a + hi - lo + 3) & ~3
         if a > NEWRAM[1]: raise Error("NEWRAM overflow")
         s.ram_used = a - NEWRAM[0]
+        s.hook_at = {}
+        for lo, hi, gs in HOOK_REGIONS:
+            a = lo
+            for g in gs:
+                a = (a + 1) & ~1
+                s.hook_at[g] = a; a += len(s.gen(g, 0, sizing=True))
+            if a > hi: raise Error(f"hook region {lo:#x}: {a - lo} B > {hi - lo} B")
         items = [("gen", g, len(s.gen(g, 0, sizing=True))) for g in s.gens()]
         items += [("code", u, (u[1] - u[0]) + 8 * len(pools.get(u, ()))) for u in s.kept]
         items += [("ptrs", t, 4 * n) for t, n in PTR_TABLES.items()]
@@ -269,20 +355,31 @@ class Port:
         s.free = free
 
     def gens(s):
-        return list(GEN_ASM) + ["tuning", "init_data"]
+        """Generated blocks placed in SPACE (the hook blocks have fixed places in HOOK_REGIONS)."""
+        return [g for g in GEN_ASM if g not in HOOK_BLOCKS] + ["tuning", "init_data"]
 
     def sym(s, v, sizing=False):
-        """Address of a generated-code symbol: an int, a GEN block name, or 'ram:DP2x address'."""
+        """Value of a generated-code symbol: an int, a GEN block name, 'ram:X' (DP2x RAM address X as ported),
+        'port:X' (ported DP2x code address X), 'newram_size' or 'init_len'."""
         if isinstance(v, int): return v
         if v.startswith("ram:"):
             m = s.mram(int(v[4:], 16))
             if m is None: raise Error(f"{v}: not in NEW")
             return m
-        return 0 if sizing else s.place[v]
+        if sizing: return 0
+        if v.startswith("port:"):
+            m = s.mcode(int(v[5:], 16))
+            if m is None: raise Error(f"{v}: not ported")
+            return m
+        if v == "newram_size": return s.ram_used
+        if v == "init_len": return len(s.gen("init_data", 0))
+        if v in HOOK_BLOCKS: return s.hook_at[v]
+        return s.place[v]
 
     def gen(s, name, base, sizing=False):
         if name in GEN_ASM:
-            src = [tuple(s.sym(x, sizing) if isinstance(x, str) and k == 1 and ins[0] == "ldi32" else x
+            src = [ins if isinstance(ins, str) else          # a label
+                   tuple(s.sym(x, sizing) if isinstance(x, str) and k == 1 and ins[0] == "ldi32" else x
                          for k, x in enumerate(ins)) for ins in GEN_ASM[name]]
             return assemble(src, base)[0]
         if name == "tuning": return s.tuning_blob(base)
@@ -435,18 +532,36 @@ class Port:
         return sites
 
     def claim_space(s):
-        """Patch SPACE_PATCHES, then check no DP2 code outside SPACE refers into SPACE (except the kept setter)."""
-        for site, old, new in SPACE_PATCHES:
-            if s.db(site, 6) != bytes([0x9f, s.db(site, 2)[1]]) + struct.pack(">I", old) or s.db(site, 2)[1] & 0xf0 != 0x80:
-                raise Error(f"{site:#x}: not ldi:32 {old:#x}")
-            s.d[site + 2 - BASE + HDR:site + 6 - BASE + HDR] = struct.pack(">I", new)
+        """Check that no DP2 code that stays live refers into SPACE or into the middle of a HOOK_REGION.
+        (Aligned data words pointing into SPACE were checked by hand: NOTES-DP2.md section 8.)"""
         inside = lambda v: any(lo <= v < hi for lo, hi in SPACE)
-        patched = {site for site, _, _ in SPACE_PATCHES} | set(SPACE_OK) | set(SPACE_HOOKED)
+        hooked = lambda a: any(lo <= a < hi for lo, hi, _ in HOOK_REGIONS)
+        patched = {site for site, _, _ in PTR_PATCHES} | set(SPACE_OK)
         for a, b, t in s.D.ins:
-            if not t or inside(a) or a in patched: continue
+            if not t or inside(a) or hooked(a) or a in patched: continue
             m = re.match(r"(?:ldi:32|ldi:20|call(?::d)?|b\w+(?::d)?) (0x[0-9a-f]+)", t)
-            if m and inside(int(m.group(1), 16)):
-                raise Error(f"DP2 {a:#x} '{t}' refers into the reused space")
+            if not m: continue
+            v = int(m.group(1), 16)
+            if inside(v): raise Error(f"DP2 {a:#x} '{t}' refers into the reused space")
+            if any(lo < v < hi for lo, hi, _ in HOOK_REGIONS):
+                raise Error(f"DP2 {a:#x} '{t}' refers into the middle of a replaced function")
+        # the task table entry of task 6 must be the old body, which task6 now occupies
+        if struct.unpack(">I", s.db(0x200090, 4))[0] != 0x3817a0: raise Error("task table entry 6 is not 0x3817a0")
+
+    def hook(s):
+        """Write the HOOK_REGIONS blocks and the PTR_PATCHES (after layout, so the symbols are known)."""
+        s.hooks = {}
+        for lo, hi, gs in HOOK_REGIONS:
+            blob = bytearray(hi - lo)
+            for g in gs:
+                a = s.hook_at[g]; b = s.gen(g, a); s.hooks[g] = (a, b)
+                blob[a - lo:a - lo + len(b)] = b
+            s.d[lo - BASE + HDR:hi - BASE + HDR] = blob
+        for site, old, new in PTR_PATCHES:
+            b = s.db(site, 6)
+            if b[0] != 0x9f or b[1] & 0xf0 != 0x80 or struct.unpack(">I", b[2:])[0] != old:
+                raise Error(f"{site:#x}: not ldi:32 {old:#x}")
+            s.d[site + 2 - BASE + HDR:site + 6 - BASE + HDR] = struct.pack(">I", s.sym(new))
 
     def check_tuning(s):
         """Every use of TUNING_PTR must be a chain of loads ending in one the flash copy provides:
@@ -498,6 +613,7 @@ class Port:
         for a, b in out.items():
             s.d[a - BASE + HDR:a - BASE + HDR + len(b)] = b
         s.verify()
+        s.hook()
 
     # -- verify: disassemble the output and compare with the source, instruction by instruction ---------------
     def objdump(s, blob, vma):
@@ -532,11 +648,6 @@ class Port:
                 if got.get(pc) != exp:
                     raise Error(f"verify {i.a:#x}->{pc:#x}: expected '{exp}', got '{got.get(pc)}'")
                 n += 1
-        # the checked ldi:32 values themselves must be what mapval said
-        for cat, l in s.log.items():
-            if cat.startswith(("code", "table(", "ram", "const")):
-                for v, m, site in l:
-                    pass
         s.verified = n
 
     def report(s):
@@ -556,6 +667,13 @@ class Port:
                     print(f"    {v:#x} -> {m:#x}   x{len(sites)} ({' '.join(f'{a:x}' for a in sites[:4])})")
         print(f"verified {s.verified} instructions against objdump; {s.tuning_uses} tuning reads checked")
 
+    def report_hooks(s):
+        for g, (a, b) in s.hooks.items():
+            print(f"--- {g} @ {a:#x} ({len(b)} B)")
+            for k, t in sorted(s.objdump(b, a).items()): print(f"  {k:x}: {t}")
+        for site, old, new in PTR_PATCHES:
+            print(f"patch {site:#x}: ldi:32 {old:#x} -> {s.sym(new):#x} ({new if isinstance(new, str) else 'DP2'})")
+
 
 def checksum(d):
     struct.pack_into(">I", d, 0x4c, 0)
@@ -566,18 +684,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?")
     ap.add_argument("--report", action="store_true")
-    ap.add_argument("--unhooked", action="store_true", help="write the image without hooks (NOT flashable)")
+    ap.add_argument("--hooks", action="store_true", help="disassemble the hook code")
     a = ap.parse_args()
     p = Port()
     try:
         p.build()
     except Error as e:
         sys.exit(f"port_af: {e}")
-    if a.report or not a.out: p.report()
+    if a.report or not a.out and not a.hooks: p.report()
+    if a.hooks: p.report_hooks()
     if a.out:
-        if not a.unhooked:
-            sys.exit("port_af: the hooks (step 3) are not written yet, so the image would still call into the reused "
-                     "space (" + ", ".join(f"{k:#x}" for k in SPACE_HOOKED) + "). Use --unhooked for a test image.")
         checksum(p.d)
         open(a.out, "wb").write(p.d)
         print("wrote", a.out)

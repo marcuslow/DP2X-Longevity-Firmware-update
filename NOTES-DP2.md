@@ -239,8 +239,9 @@ at `0x801018d4` (`0x213068`), not x/y.
 1. **9-point auto AF: decided by the user, centre point.**
    - AF mode is `0x801018d0`: 1 = auto, 2 = selected point. It is only meaningful in some shooting modes
      (`0x213014`).
-   - In auto mode the poll adapter returns `0x10`, which is 1<<4, the centre.
-   - Still to do: make sure the front half programs the centre window in auto mode.
+   - ~~In auto mode the poll adapter returns `0x10`, which is 1<<4, the centre.~~ Wrong, see section 8: in the DP2
+     numbering the centre is index 0 (mask 1), and the stock DP2 already reports 1 in auto mode.
+   - ~~Still to do: make sure the front half programs the centre window in auto mode.~~ Done in section 8.
 2. **Contrast scale: same AF block setup on both cameras.**
    - The HPF coefficients (DP2 `0x6a01ad5c` / DP2x `0x6a01b5bc`, loader `0x27f82e` == `0x283418`) are identical.
    - The AF-mode window templates are identical: mode1, normal, and (`0x28`, `0xda`). DP2 `0x3835dc` ==
@@ -340,3 +341,67 @@ layout in the DP2 (`0x6a01af28`/`0x6a01af4c`); only the settings and curves diff
      If so, replacing task 6 breaks it unless the hooks do what the DP2x does.
    - Find out what drives it (callers `0x238ac0`, `0x238d2c`: probably MF, or the preset focus distance) before
      repointing task 6.
+
+## 8. Hooks (step 3, done 2026-09-27)
+
+`tools/port_af.py build/DP2V105.BIN` writes the complete image; `--hooks` disassembles the hook code. **Not tested on
+a camera or in the emulator yet** (step 5). The image changes only: the two SPACE regions, the five replaced functions
+below, six `ldi:32` immediates, and the checksum. The setter `0x280acc` is untouched.
+
+**Engine state 3 (the open item of section 7), resolved:**
+- The DP2 positioning routine `0x3821f4` hands the step delta (`pos - r9`, the same value as on the DP2x) to the
+  old module (`0x302e84`). The DP2x `0x38b344` hands it to the new engine (`0x284448`).
+- `0x37fc74` / `0x37fcac` are DP2x `0x38a854(0)` / `(1)` without the engine part. They set the flag byte `0x6a0195bd`
+  and send event {1} / {0,0,0,1} (module messages 8 / 0xa).
+- On the DP2 the old module handles messages only in its frame routine `0x302b60`. Only two places run it: the old
+  task-6 body (replaced) and `0x38258c`, a self-driven reposition that has no references at all (dead). So after the
+  port the old module is idle, exactly as on the DP2x.
+- Fix, as the DP2x does it: the two `0x302e84` calls in `0x3821f4` go to the ported `0x284448`. After their event,
+  `0x37fc74`/`0x37fcac` also set engine state 3/0 (ported `0x284490`).
+
+**AF point / window (corrects section 6):**
+- The DP2 SetHpfWindowSize `0x27f92a` places the single filter window by AF point itself: it uses `0x237d6a`
+  (1 << point) and picks row offsets from the mask bits `&0xe` / `&0x1c0`. The DP2x one (`0x283514`) uses the x/y
+  `0x2130e4` instead.
+- So the front half (DP2-native) already puts the window at the selected point, and the single-window DP2x engine
+  measures the right place.
+- The window mask `0x6a0195b6` (`0x37fd7c` arg: 0x1ff auto, 1<<point, or 1) is only a record. The old success setter
+  `0x380f30` reported `mask == 0x1ff ? 1 : mask`.
+- Index 0 / mask 1 is the centre (`0x213068` returns 0 in one shooting mode; bit 0 is in neither row mask). So the stock
+  DP2 auto mode already reports the centre, and the poll adapter returns the same value.
+- The old engine never moves the window (no calls to `0x21308e`, `0x27f92a`, `0x37fd7c` from the old engine or module).
+
+**The old task-6 state the rest of the DP2 reads:**
+- `0x6a019598`, the AF state: 1 while running; the end setters write 0 (OK, `0x380f30`), 3 (no contrast, `0x380f64`),
+  5 (`0x380f18`). Readers:
+  - The half-press code, after the result (`0x38016c` -> `0x2567f8`: AF-failed flag `0x6a0197a5` = state != 0).
+  - The capture sequence's "wait for the AF" `0x3826ec` (from `0x27c770`): it sets `0x6a019590`=1, waits in 5 ms
+    steps until the state is 0 or 3, then clears `0x6a019590`. Abort is skipped while `0x6a019590` is set.
+- `0x6a0195b4`, `0x6a01959c`, `0x6a0195bb`, `0x6a0195a8`: read only by the replaced functions or old-engine code.
+- Task 6 is started once (`sta_tsk(6)`). The flag-1 stop bit (`set_flg(1, 0xc0000000)`, from `0x36cf68`, identical
+  to the DP2x `0x377880`) made the old body return; the DP2x body ignores it, and so does the port.
+
+**Hooks written:**
+
+| DP2 | becomes |
+|---|---|
+| `0x37fdfc` AF start | busy (ported poll == 2) -> 1; else `0x6a01959c`=0, ported `0x28425a`, `0x6a019598`=1, ported `0x38b038`, return 0 |
+| `0x37fe5c` AF abort | if `0x6a019590` == 0: ported `0x38b090(3)` |
+| `0x37fe78` AF poll | ported `0x38b188`: 2 -> 0; 0 -> `0x6a019598`=0, return mask (`0x6a0195b6`, or 1 if 0x1ff); 1 -> `0x6a019598`=3, return -1 |
+| `0x3817a0` task-6 body (table entry `0x200090` unchanged) | `task6`: memset the new RAM (0x7cc B) to 0, copy 44 B of DP2x .data to the lens/task block, jump to ported `0x38b1d4`. Also holds `motor_done`, `evt_move`, `evt_stop` and the two move wrappers |
+| `0x3826ec` AF wait | `0x6a019590`=1; `dly_tsk(5)` while the ported poll is busy (this includes the final hold); `0x6a019590`=0 |
+| `ldi:32` at `0x381014` | motor-done callback -> `motor_done`: DP2 `0x380f84`, then ported `0x38a594` |
+| `ldi:32` at `0x37fc9a` / `0x37fcda` | `0x302c98` -> `evt_move` / `evt_stop` |
+| `ldi:32` at `0x3824c6` / `0x3824fe` | `0x302e84` -> ported `0x284448` |
+
+- The DP2 half-press code already sets the sensor AF mode (`0x37c7e8(1)`) and waits (`0x206220`/`0x20623c`) before
+  the start. So the engine start runs one wait later than on the DP2x (`0x28425a` is between the two there).
+- The relocator's entry list now also has `0x284448`/`0x284490`. The move wrappers moved to the task-6 region
+  (SPACE has 26 B left).
+- `claim_space` also rejects references into the middle of a replaced function. Aligned data words pointing into
+  SPACE were checked by hand: the ROM table `0x40a850` is used only from inside the old engine, and `0x6a01ad98`'s
+  `0x002800da` is the window template's 0x28/0xda. The rest are numeric tables.
+
+**Next: step 5.** No FR emulator is saved in the repo (the one used for the DP2x fallback check was a throwaway).
+Write `tools/fremu.py`. Run the DP2x original and the port on the same synthetic contrast curves, and compare the
+lens-move sequence.
