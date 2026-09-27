@@ -2,7 +2,7 @@
 """Patch Sigma DP2x firmware 1.02 so the lens barrel is not retracted at power-off
 and is not re-homed (retract + extend) at power-on when it is already out.
 
-Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5] [--af-fallback] [--ae-debug]
+Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5] [--af-fallback] [--ae-debug] [--cond-bias]
 See NOTES.md for the analysis behind each patch.
 """
 import argparse, hashlib, struct, sys
@@ -507,20 +507,115 @@ AED_SRC = [
     "fmt", ("bytes", b"S%d H%d/%d M%d A%d B%d\0"),
 ]
 
-def ae_debug_patches():
-    code, L = assemble(AED_SRC, AED_BASE)
+# Conditional bias (--cond-bias, implies the readout): the fixed eval bias is replaced by one that follows the hot-zone
+# count H of the zone stats above: H 0-7 -> 0, 8-25 -> -1/3 EV, >= 26 -> -0.5 EV, in Evaluative and Center-Weighted
+# (not Spot). Hot/warm thresholds are lowered by the bias being applied, so H is counted as if unbiased (no feedback
+# through the darker live view). Hysteresis: -0.5 holds while H >= 23, -1/3 while H >= 6. The level is kept as its
+# display value (0, 3, 5 = -0.x EV) in the low half of LIVE1; LIVE1 = mean>>10 <<16 | level (no max). See NOTES.md 9.19.
+CB_UP = (8, 26); CB_HOLD = (6, 23)
+def _thr(frac, ev): return round(AED_CAP * frac * 2 ** -ev)
+
+CB_SRC = [
+    "zs",
+    ("ld_r14", -16, 8),
+    ("ldi20", _thr(7/8, 0), 9), ("ldi20", _thr(1/2, 0), 0),         # thresholds for the bias being applied
+    ("ldi32", 0x6a019628, 12), ("ld", 12, 1), ("cmpi", 2, 1), ("beq", "zs_go"),    # Spot: never biased
+    ("ldi32", AED_LIVE1 + 2, 12), ("lduh", 12, 1),
+    ("cmpi", 3, 1), ("bne", "zs_t5"), ("ldi20", _thr(7/8, 1/3), 9), ("ldi20", _thr(1/2, 1/3), 0), ("bra", "zs_go"),
+    "zs_t5",
+    ("cmpi", 5, 1), ("bne", "zs_go"), ("ldi20", _thr(7/8, 1/2), 9), ("ldi20", _thr(1/2, 1/2), 0),
+    "zs_go",
+    ("ldi8", 16, 7), ("ldi8", 0, 4), ("ldi8", 0, 2), ("ldi8", 0, 6),                 # rows, hot, warm, sum
+    "zs_row",
+    ("ldi8", 0, 13),
+    "zs_col",
+    ("ld_r13", 8, 1), ("add", 1, 6),
+    ("cmp", 0, 1), ("bc", "zs_next"), ("addi", 1, 2),
+    ("cmp", 9, 1), ("bc", "zs_next"), ("addi", 1, 4),
+    "zs_next",
+    ("addi", 4, 13), ("ldi8", 0x40, 12), ("cmp", 12, 13), ("blt", "zs_col"),
+    ("ldi20", 0x100, 12), ("add", 12, 8),
+    ("addi", -1, 7), ("cmpi", 0, 7), ("bne", "zs_row"),
+    ("mov", 2, 1), ("raw", "b501"), ("or", 4, 1),
+    ("ldi32", AED_LIVE0, 12), ("st", 1, 12),
+    ("ldi8", 0, 5),                                                 # new level from H (r4)
+    ("ldi8", CB_UP[0], 1), ("cmp", 1, 4), ("blt", "zs_old"), ("ldi8", 3, 5),
+    ("ldi8", CB_UP[1], 1), ("cmp", 1, 4), ("blt", "zs_old"), ("ldi8", 5, 5),
+    "zs_old",                                                       # hysteresis on the old level
+    ("ldi32", AED_LIVE1 + 2, 12), ("lduh", 12, 1),
+    ("cmpi", 5, 1), ("bne", "zs_o3"),
+    ("ldi8", CB_HOLD[1], 2), ("cmp", 2, 4), ("blt", "zs_st"), ("ldi8", 5, 5), ("bra", "zs_st"),
+    "zs_o3",
+    ("cmpi", 3, 1), ("bne", "zs_st"),
+    ("ldi8", CB_HOLD[0], 2), ("cmp", 2, 4), ("blt", "zs_st"), ("cmpi", 0, 5), ("bne", "zs_st"), ("ldi8", 3, 5),
+    "zs_st",
+    ("raw", "b126"), ("raw", "b506"), ("or", 5, 6),                 # (sum>>18)<<16 | level
+    ("ldi32", AED_LIVE1, 12), ("st", 6, 12),
+    ("ld_r14", -24, 0), ("ldi32", 0x6a010644, 9), ("ret",),
+
+    "cb",                                                           # AE target: meter + EV comp (as stock) + bias
+    ("push", RP), ("ldi32", 0x38968c, 12), ("call_r", 12),
+    ("ldi8", 0x40, 13), ("lduh_r13", 8, 5), ("cmpi", 9, 5), ("beq", "cb_bias"),
+    ("mov", 5, 13), ("lsl", 2, 13), ("ld_r13", 9, 0),               # r9 = EV table 0x3c0198
+    ("cmpi", 9, 5), ("bge", "cb_minus"), ("add", 0, 4), ("bra", "cb_bias"),
+    "cb_minus", ("sub", 0, 4),
+    "cb_bias",
+    ("ldi32", 0x6a019628, 12), ("ld", 12, 0), ("cmpi", 2, 0), ("beq", "cb_done"),
+    ("ldi32", AED_LIVE1 + 2, 12), ("lduh", 12, 0),
+    ("cmpi", 3, 0), ("bne", "cb_5"), ("ldi20", 0x5555, 0), ("add", 0, 4), ("bra", "cb_done"),
+    "cb_5",
+    ("cmpi", 5, 0), ("bne", "cb_done"), ("ldi20", 0x8000, 0), ("add", 0, 4),
+    "cb_done", ("pop", RP), ("ret",),
+
+    "lt",
+    ("ldi32", AED_LIVE0, 13), ("ld", 13, 0), ("ldi32", AED_LAT0, 12), ("st", 0, 12),
+    ("ldi32", AED_LIVE1, 13), ("ld", 13, 0), ("ldi32", AED_LAT1, 12), ("st", 0, 12),
+    ("ldi32", 0x6a019644, 13), ("ld", 13, 0), ("ldi32", AED_LATBV, 12), ("st", 0, 12),
+    ("ret",),
+
+    "vs",
+    ("raw", "a3fc"),
+    ("ldi32", AED_LAT0, 12), ("ld", 12, 0),
+    ("mov", 0, 1), ("raw", "b101"), ("raw", "1301"),                # warm -> (r15,0)
+    ("mov", 0, 7), ("raw", "97b7"),                                 # hot -> r7
+    ("ldi32", AED_LAT1, 12), ("ld", 12, 0),
+    ("mov", 0, 1), ("raw", "b101"), ("raw", "1311"),                # mean -> (r15,4)
+    ("raw", "97b0"), ("raw", "1330"),                               # level -> (r15,12)
+    ("ldi32", AED_LATBV, 12), ("ld", 12, 0),
+    ("mov", 0, 1), ("lsl", 2, 1), ("add", 0, 1), ("lsl", 1, 1), ("raw", "b901"), ("raw", "1321"),  # Bv*10 -> (r15,8)
+    ("ldi32", 0x80101ff4, 12), ("ld", 12, 6),
+    ("ldi8", 0xbc, 4), ("extsb", 4), ("add", 14, 4),
+    ("ldi32", "fmt", 5),
+    ("ldi32", 0x3757b2, 12), ("call_r", 12),
+    ("raw", "a304"),
+    ("ldi32", 0x2c72b6, 12), ("jmp_r", 12),
+    "fmt", ("bytes", b"S%d H%d/%d A%d B%d E%d\0"),
+]
+
+def ae_debug_patches(cond=False):
+    code, L = assemble(CB_SRC if cond else AED_SRC, AED_BASE)
     assert AED_BASE + len(code) <= CAVE_HI, "ae-debug code overflows the cave"
     ldi = lambda lab: assemble([("ldi32", L[lab], 12)], 0)[0].hex()
-    return [
+    what = "zone stats, conditional bias, shot latch, version-line printer" if cond else \
+           "AE zone stats, shot latch, version-line printer"
+    line = "S H/warm A B E<bias>" if cond else "S<shots> H<hot>/<warm> M<max> A<mean> B<Bv*10>"
+    out = [
         ("aed-cave", AED_BASE, None, code.hex(),
-         f"cave: AE zone stats, shot latch, version-line printer ({len(code)} B, ends {AED_BASE + len(code):#x})"),
+         f"cave: {what} ({len(code)} B, ends {AED_BASE + len(code):#x})"),
         ("aed-zones", 0x385f8a, "2fa09f896a010644", ldi("zs") + "971c",
          "metering 0x385d10 after zone loop 1: call zone stats (redoes the 2 displaced instructions)"),
         ("aed-latch", 0x25aa00, "9f8c00203e66", ldi("lt"),
          "Still Action Start: no-op debug print -> latch zone stats + Bv"),
         ("aed-version", 0x2c7268, "9f8c0021362a971c", ldi("vs") + "970c",
-         "version screen: print S<shots> H<hot>/<warm> M<max> A<mean> B<Bv*10> instead of the version"),
+         f"version screen: print {line} instead of the version"),
     ]
+    if cond:
+        call = ldi("cb") + "971ce009"       # call cave ; bra <function epilogue>
+        out += [
+            ("cond-bias-call1", 0x38976c, "d78fc40d0185a895e209", call, "AE target 0x389724: meter+EV comp -> cond bias"),
+            ("cond-bias-call2", 0x389ac0, "d5e5c40d0185a895e209", call, "AE target 0x389a7c: meter+EV comp -> cond bias"),
+        ]
+    return out
 
 def main():
     ap = argparse.ArgumentParser()
@@ -543,6 +638,9 @@ def main():
                     help="when AF fails, move the lens to the sharpest position seen during the scan (box stays red)")
     ap.add_argument("--ae-debug", action="store_true",
                     help="DEBUG: version line shows the last shot's AE zone stats and Bv instead of the version")
+    ap.add_argument("--cond-bias", action="store_true",
+                    help="EXPERIMENTAL: bias by hot AE zones (0 / -1/3 / -0.5 EV) in Evaluative and Center-Weighted; "
+                         "replaces --eval-bias, includes the --ae-debug readout")
     a = ap.parse_args()
     if a.af_25 and a.af_5:
         sys.exit("--af-25 and --af-5 are alternatives (same cave space)")
@@ -567,9 +665,11 @@ def main():
         todo += af5_patches()
     if a.af_fallback:
         todo += affb_patches()
-    if a.ae_debug:
-        todo += ae_debug_patches()
-    if a.eval_bias or a.af_25 or a.af_5 or a.af_fallback or a.ae_debug:
+    if a.cond_bias and a.eval_bias:
+        sys.exit("--cond-bias replaces --eval-bias (same AE target hooks)")
+    if a.ae_debug or a.cond_bias:
+        todo += ae_debug_patches(cond=a.cond_bias)
+    if a.eval_bias or a.af_25 or a.af_5 or a.af_fallback or a.ae_debug or a.cond_bias:
         o = off(CAVE_LO)
         if hashlib.sha256(d[o:off(CAVE_HI)]).hexdigest() != CAVE_STOCK_SHA:
             sys.exit("code cave 0x27ea2e-0x27f8e3 is not stock")

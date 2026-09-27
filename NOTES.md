@@ -343,6 +343,16 @@ SHA-256 `4caa31529c03018f5974edf5ffdee20269b38452a65a5d81b83d2406cb1d948d` (main
 - Cave allocation now: `0x27f6b4`-`0x27f7c5` ae-debug; free `0x27f7c6`-`0x27f8e3` (286 B).
 - Test: note file number, readout and how the frame looked (blown / fine / dark) for scenes like SDIM2899 (subject in shade, sunlit background), SDIM4016 (overcast with sky), overcast without sky, and front-lit sun. Rollback: main's `build/DP2X102.BIN` (7cb9fb81).
 
+### 9.19 Conditional bias (`--cond-bias`, branch `experimental-aedebug`, built 2026-09-27, not yet flashed)
+`python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --af-5 --af-fallback --cond-bias`
+SHA-256 `099512246aef6734a58e877b069a98657508841bf91acea16fef9056583d3361`. Replaces `--eval-bias`; includes the readout (9.18, changed format).
+- User's rule (2026-09-27), provisional until the readout data is in: hot zones H 0-7 -> 0, 8-25 -> -1/3 EV, >= 26 -> -0.5 EV. Evaluative and Center-Weighted; Spot never biased.
+- No feedback: while a bias is applied, the hot/warm thresholds are lowered by the same factor (hot `0x33ae0` -> `0x2904b` at -1/3, `0x248b0` at -0.5), so H is counted as if unbiased. Hysteresis: -0.5 holds while H >= 23, -1/3 while H >= 6.
+- Level lives in the low half of LIVE1 (`0x6a018d72`) as its display value 0/3/5; LIVE1 = mean>>10 <<16 | level (the max is no longer kept). A junk value at boot (0x0353) counts as 0.
+- AE target hooks `0x38976c`/`0x389ac0` call `cb` (0x27f778): meter + EV comp exactly as stock, then +0x5555 or +0x8000 by level unless AE mode = 2. The old eval cave `0x27eb4e` stays stock (unused).
+- Readout: `S<shots> H<hot>/<warm> A<mean> B<Bv*10> E<bias>`, E = 0, 3 (-1/3 EV) or 5 (-0.5 EV) at the shot. H is the unbiased-equivalent count the decision used.
+- Cave: `0x27f6b4`-`0x27f871` (445 B); free `0x27f872`-`0x27f8e3` (114 B).
+
 ## 10. Resume here (session ended 2026-09-26)
 
 **`main` has everything (merged from `experimental-affb`, 2026-09-26).** Public downloads:
