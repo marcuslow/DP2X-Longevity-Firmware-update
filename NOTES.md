@@ -220,6 +220,7 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
   - AF uses `0x6a018d54`.
 - The table is filled at start-up (`0x244ca4`) from per-camera EEPROM calibration (`0x24a754` reads at `0x31e`/`0x320`, 24 bytes = 4 steps x 3 layers). On failure ("AFE Gain Init Error") the fallback is `0x6a018d84`: step 0 = `0x000`, 1 = `0x0aa`, 2 = `0x1ff`, 3 = `0x353`.
 - The requested ISO is converted to an analog step plus a digital remainder in `0x244f..`-`0x2450d2` (double maths, base 50.0; step -> `0x6a018d10`, digital gain -> `0x8010b124`). The threshold table `0x6a018cd0` is filled at runtime, so the exact ISO -> step mapping wasn't confirmed statically.
+- **ISO -> AFE step (confirmed 2026-09-27, `0x244de6`, called from still capture `0x390c0c`/`0x391268`):** thresholds are u16 `(100, 200, 400, 6400)` at flash `0x3be3e0`, and step = first i with ISO < thr[i]. So ISO 50 -> step 0 (code 0, minimum), ISO 100 -> step 1, ISO 200 -> step 2, ISO 400-3200 -> step 3, plus digital gain above 400 (the ISO is clamped to 400 for the analog part at `0x244f54`). Exposures >= 1 s (`0x244e34`, 1000000 us), or when `0x27e752` returns 0, set flag `0x6a018da4`/`da5` and force the step-0 (ISO 50) path, with the real ISO carried in the digital factor. `0x6a018d0c` = first 4 bytes of EEPROM block `0x320` (per-camera scale). A 15-entry f-number table (2.8 ... 14, flash `0x3be094`) picks a per-aperture factor from runtime table `0x6a018cd0` -> `0x8010b120`. Where `0x8010b120`/`0x8010b124` are consumed is not traced yet.
 - Conclusion: step 0 is gain code 0, the AFE minimum. There's no lower analog setting, so firmware can't add highlight headroom. The DP2 vs DP2x difference is hardware. The practical mitigation is exposing less.
 
 ### 9.10 Metering and EV compensation
@@ -317,6 +318,60 @@ SHA-256 `a6349399f322bb62c09703c22ba1ef09ee87900e1c56c205736943cc103e59e8`, chec
   - Verified by running the built bytes on the FR emulator with synthetic scans: clear peak, flat noise, first-frame peak, n = 2, success, refine state, huge values.
 - Not done yet (optional next step): relax the 30000 threshold (for example to 10000, `9b012710`), so weak real peaks count as focus (green). Risk: a noise peak could be accepted as green at the wrong focus.
 - Test: the same dim scene. Expect a red box, but the subject should now be sharp, or close to it, instead of the lens landing elsewhere. Check that normal-light AF is unchanged.
+
+### 9.16 Scene-dependent eval bias (analysis, 2026-09-27)
+- Field report: with the -0.5 EV eval bias, overcast shots at f/2.8 ISO 100 (e.g. SDIM4016: 1/1250, bright sky over half the frame) come out too dark. The bias is wanted only in sunlit scenes (sun on walls, visible cast shadows).
+- **Shutter limit:** the top speed is 1/2000 s (catalog). At f/2.8 ISO 100 that is EV100 13.9 = Bv 8.9. Full sun is about Bv 10, so there the exposure is pinned at 1/2000, it overexposes, and the bias can't act. Many 2026-09-18 shots are pinned (SDIM3691-3717, all 1/2000 f/2.8). Use ISO 50 (also AFE step 0, 9.9) or f/4 in sun.
+- EXIF Bv (log2(N^2/t) - log2(ISO/100) - 5) of the 2026-09-27 overcast set: 6.6-8.6. That set has no direct-sun frames.
+- **Scene Bv in firmware:** `0x387488` returns APEX Bv (16.16). If latch flag `0x6a019670` = 1 it returns the latched `0x6a019644` (latched by `0x385cb8` via `0x3874a8`); otherwise it reads the current exposure record, `0x8010bb10 + [0x8010bb04]*0x2c`, field +0x24 (`0x387468`). AE computes it independently of the WB setting; AWB is only a consumer (`0x384e6a` -> `0x398f78` r5 -> `0x8010db60`, outdoor threshold AL_AWB_BV_TH = 6.0 at `0x419618`). Sibling getters: +0x14 `0x3873ec`, +0x1c `0x387408` (used by the AFE step code), +0x20 `0x387428`, +0x18 at `0x387448`.
+- **Counter-example (the case the bias is for):** `~/Pictures/X3f-2017/DP2X/SDIM2899` (DP2x, before the bias): 1/80 f/2.8 ISO 200, **Center-Weighted** (EXIF MeteringMode 2 = firmware metering value 2), exposure Bv 3.3. Subject in shade, sunlit leaves and background behind. 23% of pixels clipped, mean L 172. Compare the 2026-09-27 overcast set: 0-0.1% clipped, mean L 52-92. So average brightness can't separate sun from overcast: a Bv gate would not fire on SDIM2899. The trigger has to be contrast (how much of the frame sits well above the exposure), which needs the AE zone luminances. The current bias is Evaluative-only, so it would not have acted on SDIM2899 either.
+- ~~Plan: gate the cave's bias on Bv~~ (superseded by the counter-example above), with a ramp: 0 at Bv <= 8.5, full -0.5 at Bv >= 9.5. Still to check: Bv is fresh when the AE target functions run, and whether the bias feeds back into Bv (bounded: ramp slope 0.5).
+- Meter unit note: `0x38968c` = `0x389eb0`(dB) + 65536 * double(AE+0x38); `0x389eb0` appears to convert a dB value relative to 60 dB into 16.16 EV (x log2(10)/20; sign not checked).
+
+### 9.17 AE zone statistics (analysis, 2026-09-27, for the contrast trigger)
+- Metering modes share one path: AE mode (`0x6a019628`: 0 Eval, 1 CWA, 2 Spot) only picks the 16x16 4-bit weight map (`0x3be7dc` + mode*128), which `0x38674c` hands to the ISP driver (`0x2eab8e`: ctx `[0x80155d68]`+0x1b4, programmed into hardware). The AE target functions `0x389726`/`0x389a7c` are the same for all modes, so the bias can cover Eval + CWA by testing mode != 2.
+- Per-frame metering `0x385d10` (also the Bv source, 9.16): zone buffer ptr = `0x22edac()` | 0x80000000 (ring of DMA'd ISP stats, index bytes `0x6a0187fa/fb`). Loop 1 (`0x385e4c`-`0x385f88`): 16 rows x 16 zones, row stride 0x100 bytes, u32 zones; zone = (Z - (D - off)) * (gain>>10) >> 6, set to 0 if negative, clamped to `0x3b100`. D = `0x6a01295c` (16x16 u32 dark reference, via `0x384d0c`), off = row table `0x6a0105c4` + [0x6a019620]*64, gain r9 from `0x2453a0`/`0x3890a8`/`0x38909c` (AFE/ISO dependent). Loop 2 (`0x385fa2`-`0x386174`): 16 rows x 64, row stride 0x400, dark ref `0x6a01155c` / `0x6a010644`, no clamp (a finer grid, purpose unknown).
+- Metered level: AE record `0x8010bc40 + mode_idx*0x24`, +0x10 = level as a double in dB; `0x389eb0` dB -> 16.16 EV, `0x389f44` the inverse.
+- Open: whether `0x3b100` is the saturation level (the idea: count near-saturated zones = how much of the frame blows out), and where the weighted average is formed (likely in the ISP library, `0x2e....`). Plan: a debug build that shows the last shot's hot-zone count and Bv on the version screen, calibrated on a SDIM2899-like and a SDIM4016-like scene.
+
+### 9.18 AE debug readout (`--ae-debug`, branch `experimental-aedebug`, built 2026-09-27, not yet flashed)
+`python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback --ae-debug`
+SHA-256 `4caa31529c03018f5974edf5ffdee20269b38452a65a5d81b83d2406cb1d948d` (main's features plus the readout).
+- The version line shows `S<shots> H<hot>/<warm> M<max> A<mean> B<Bv*10>` for the **last shot**: hot = zones >= 7/8 of the zone cap `0x3b100`, warm = zones >= 1/2 cap (of 256), M/A = brightest/average zone >> 10 (0..236, 236 = at the cap), B = latched metered Bv x 10 (83 = Bv 8.3). Before the first shot after power-on the values are junk (the old table contents).
+- Code at `0x27f6b4`-`0x27f7c5` (273 B): `zs` zone stats, called from `0x385f8a` every metering frame (redoes `ld @(r14,-24),r0` / `ldi:32 0x6a010644,r9`); `lt` latch, replaces the no-op debug print `0x203e66` at `0x25aa00` (Still Action Start); `vs` printer, jumped to from `0x2c7268` (own 16-byte arg area; the function's outgoing area is only 12 B above the 32-byte line buffer at r14-0x44), returns to `0x2c72b6`.
+- RAM: `0x6a018d6c`-`0x6a018d7f` (factory alternate AFE table; read by `0x2451e6` only when service flag `0x6a01b3f0` != 0, and that flag is 0 at boot and written only by the dead service block). Live: +0 hot|warm<<16, +4 max>>10|mean>>10<<16. Latched: +8, +0xc, +0x10 Bv.
+- Cave allocation now: `0x27f6b4`-`0x27f7c5` ae-debug; free `0x27f7c6`-`0x27f8e3` (286 B).
+- Test: note file number, readout and how the frame looked (blown / fine / dark) for scenes like SDIM2899 (subject in shade, sunlit background), SDIM4016 (overcast with sky), overcast without sky, and front-lit sun. Rollback: main's `build/DP2X102.BIN` (7cb9fb81).
+
+### 9.19 Conditional bias (`--cond-bias`, branch `experimental-aedebug`, built 2026-09-27, not yet flashed)
+`python3 tools/patch_lens.py dp2x102.bin build/DP2X102.BIN --af-refine 8 --shutter-count --iso-max-200 --af-5 --af-fallback --cond-bias`
+SHA-256 `099512246aef6734a58e877b069a98657508841bf91acea16fef9056583d3361`. Replaces `--eval-bias`; includes the readout (9.18, changed format).
+- User's rule (2026-09-27), provisional until the readout data is in: hot zones H 0-7 -> 0, 8-25 -> -1/3 EV, >= 26 -> -0.5 EV. Evaluative and Center-Weighted; Spot never biased.
+- No feedback: while a bias is applied, the hot/warm thresholds are lowered by the same factor (hot `0x33ae0` -> `0x2904b` at -1/3, `0x248b0` at -0.5), so H is counted as if unbiased. Hysteresis: -0.5 holds while H >= 23, -1/3 while H >= 6.
+- Level lives in the low half of LIVE1 (`0x6a018d72`) as its display value 0/3/5; LIVE1 = mean>>10 <<16 | level (the max is no longer kept). A junk value at boot (0x0353) counts as 0.
+- AE target hooks `0x38976c`/`0x389ac0` call `cb` (0x27f778): meter + EV comp exactly as stock, then +0x5555 or +0x8000 by level unless AE mode = 2. The old eval cave `0x27eb4e` stays stock (unused).
+- Readout: `S<shots> H<hot>/<warm> A<mean> B<Bv*10> E<bias>`, E = 0, 3 (-1/3 EV) or 5 (-0.5 EV) at the shot. H is the unbiased-equivalent count the decision used.
+- Cave: `0x27f6b4`-`0x27f871` (445 B); free `0x27f872`-`0x27f8e3` (114 B).
+
+### 9.20 Hot-zone calibration (2026-09-27, white-screen and wall tests)
+Readouts vs the X3F previews (clipped = max channel >= 250; blown zones = zones of a 16x16 grid with >= half their pixels clipped). Build 9.19, hot = 7/8 cap, warm = 1/2 cap:
+
+| File | Scene | Readout | Clipped | Blown zones |
+|---|---|---|---|---|
+| SDIM4075 | wall, A +2 EV | H0/0 A96 B25 E0 | 0% | 0 |
+| SDIM4076 | white screen, A +2 EV | H0/29 A87 B43 E0 | 18% | 45 |
+| SDIM4077 | screen at max, A +2 EV | H0/52 A91 B54 E0 | 23% | 59 |
+| SDIM4078 | screen at max, A +3 EV | H63/183 A123 B48 E5 | 39% | 100 |
+| SDIM4062-4073 | TV room at night, 0 EV | H0-1 | 0-2% | 0-4 |
+
+- Live-view zones scale with exposure (A about 24 at 0 EV, 96 at +2) and follow EV comp in A mode. In M mode they don't follow the manual setting (SDIM4074).
+- The stills clip at about 1/2 of the zone cap (counts >= 1/2 cap track the blown zones: 29 vs 45, 52 vs 59, and 0 on the unblown wall). 7/8 counted nothing until +3 EV. So hot = 1/2 cap, warm = 1/4 cap (readout only).
+- Rebuilt: SHA-256 `36882094c052b8c19316a091236a7ed8399287b319aad812edf5ccca0b914952`. Only the six threshold immediates changed (hot `0x1d880`/`0x17706`/`0x14e1c` at 0/-1/3/-0.5 EV applied, warm `0xec40`/`0xbb83`/`0xa70e`).
+
+### 9.21 Readout on its own line (2026-09-27)
+- The version line is stock again (with `--shutter-count`: `Ver... Shots:n`). The readout is a 2nd line at y 114, in the free slot between the version line (rect `0x460b98` = 0,94,314,20) and the hint lines at y 134/154 (rect `0x460b90`: "<icon> : Jump to" / "Firmware update proceeding").
+- Hook `0x2c72ce` (right after the version line's `0x2d303a(rect, text, 2, 0)`): call `vs`, which formats `H<hot>/<warm> A<mean> B<Bv*10> E<bias>` into the same 32-byte buffer, draws it with an 8-byte rect on its own stack area, and redoes the displaced `r0 = r14-0x1c; st r0,@(r14,-20)`.
+- Build: SHA-256 `e582d6627183750b9f0cac2fb9053b59994ed78ff03044ea369dbaeba2b0a527`. Cave `0x27f6b4`-`0x27f88d` (473 B); free `0x27f88e`-`0x27f8e3` (86 B).
 
 ## 10. Resume here (session ended 2026-09-26)
 
