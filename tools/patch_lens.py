@@ -488,23 +488,6 @@ AED_SRC = [
     ("ldi32", 0x6a019644, 13), ("ld", 13, 0), ("ldi32", AED_LATBV, 12), ("st", 0, 12),
     ("ret",),
 
-    "vs",                                                           # jumped to from the version screen 0x2c7268
-    ("raw", "a3fc"),                                                # addsp -16: own outgoing args
-    ("ldi32", AED_LAT0, 12), ("ld", 12, 0),
-    ("mov", 0, 1), ("raw", "b101"), ("raw", "1301"),                # warm -> (r15,0)
-    ("mov", 0, 7), ("raw", "97b7"),                                 # hot -> r7 (extuh)
-    ("ldi32", AED_LAT1, 12), ("ld", 12, 0),
-    ("mov", 0, 1), ("raw", "97b1"), ("raw", "1311"),                # max -> (r15,4)
-    ("raw", "b100"), ("raw", "1320"),                               # mean -> (r15,8)
-    ("ldi32", AED_LATBV, 12), ("ld", 12, 0),
-    ("mov", 0, 1), ("lsl", 2, 1), ("add", 0, 1), ("lsl", 1, 1), ("raw", "b901"), ("raw", "1331"),  # Bv*10 -> (r15,12)
-    ("ldi32", 0x80101ff4, 12), ("ld", 12, 6),                       # shots -> r6
-    ("ldi8", 0xbc, 4), ("extsb", 4), ("add", 14, 4),                # r4 = line buffer (r14-0x44, 32 B)
-    ("ldi32", "fmt", 5),
-    ("ldi32", 0x3757b2, 12), ("call_r", 12),                        # sprintf
-    ("raw", "a304"),                                                # addsp 16
-    ("ldi32", 0x2c72b6, 12), ("jmp_r", 12),
-    "fmt", ("bytes", b"S%d H%d/%d M%d A%d B%d\0"),
 ]
 
 # Conditional bias (--cond-bias, implies the readout): the fixed eval bias is replaced by one that follows the hot-zone
@@ -577,32 +560,47 @@ CB_SRC = [
     ("ldi32", 0x6a019644, 13), ("ld", 13, 0), ("ldi32", AED_LATBV, 12), ("st", 0, 12),
     ("ret",),
 
-    "vs",
-    ("raw", "a3fc"),
-    ("ldi32", AED_LAT0, 12), ("ld", 12, 0),
-    ("mov", 0, 1), ("raw", "b101"), ("raw", "1301"),                # warm -> (r15,0)
-    ("mov", 0, 7), ("raw", "97b7"),                                 # hot -> r7
-    ("ldi32", AED_LAT1, 12), ("ld", 12, 0),
-    ("mov", 0, 1), ("raw", "b101"), ("raw", "1311"),                # mean -> (r15,4)
-    ("raw", "97b0"), ("raw", "1330"),                               # level -> (r15,12)
-    ("ldi32", AED_LATBV, 12), ("ld", 12, 0),
-    ("mov", 0, 1), ("lsl", 2, 1), ("add", 0, 1), ("lsl", 1, 1), ("raw", "b901"), ("raw", "1321"),  # Bv*10 -> (r15,8)
-    ("ldi32", 0x80101ff4, 12), ("ld", 12, 6),
-    ("ldi8", 0xbc, 4), ("extsb", 4), ("add", 14, 4),
-    ("ldi32", "fmt", 5),
-    ("ldi32", 0x3757b2, 12), ("call_r", 12),
-    ("raw", "a304"),
-    ("ldi32", 0x2c72b6, 12), ("jmp_r", 12),
-    "fmt", ("bytes", b"S%d H%d/%d A%d B%d E%d\0"),
 ]
 
+def _vs_src(cond):
+    """Second version-screen line at y = 114 (the free slot between the version line at 94 and the hints at 134/154).
+    Called from 0x2c72ce, right after the stock version line is drawn; reuses the line buffer (r14-0x44, 32 B)."""
+    lat1 = [("raw", "97b0"), ("raw", "1320"), ("raw", "1301")] if cond else \
+           [("raw", "97b0"), ("raw", "1300"), ("raw", "1311")]    # cond: A (r15,0), E (r15,8); else M (r15,0), A (r15,4)
+    return [
+        "vs",
+        ("push", RP), ("raw", "a3fa"),                              # addsp -24: 16 B args + 8 B rect
+        ("ldi32", AED_LAT0, 12), ("ld", 12, 0),
+        ("mov", 0, 7), ("raw", "b107"),                             # warm -> r7
+        ("mov", 0, 6), ("raw", "97b6"),                             # hot -> r6 (extuh)
+        ("ldi32", AED_LAT1, 12), ("ld", 12, 0),
+        ("mov", 0, 1), ("raw", "b101"),                             # r1 = mean, r0 = level (cond) / max
+        lat1[0], lat1[1], lat1[2],
+        ("ldi32", AED_LATBV, 12), ("ld", 12, 0),
+        ("mov", 0, 1), ("lsl", 2, 1), ("add", 0, 1), ("lsl", 1, 1), ("raw", "b901"),   # Bv*10
+        ("raw", "1311" if cond else "1321"),                        # B -> (r15,4) / (r15,8)
+        ("ldi8", 0xbc, 4), ("extsb", 4), ("add", 14, 4),
+        ("ldi32", "fmt", 5),
+        ("ldi32", 0x3757b2, 12), ("call_r", 12),                    # sprintf
+        ("ldi8", 114, 0), ("raw", "1340"),                          # rect (x 0, y 114) -> (r15,16)
+        ("ldi32", 314 << 16 | 20, 0), ("raw", "1350"),              # (w 314, h 20)    -> (r15,20)
+        ("raw", "8bf4"), ("ldi8", 16, 0), ("add", 0, 4),            # r4 = rect
+        ("ldi8", 0xbc, 5), ("extsb", 5), ("add", 14, 5),            # r5 = text
+        ("ldi8", 2, 6), ("ldi8", 0, 7),                             # as the stock version line
+        ("ldi32", 0x2d303a, 12), ("call_r", 12),
+        ("raw", "a306"),                                            # addsp 24
+        ("ldi8", 0xe4, 0), ("extsb", 0), ("add", 14, 0), ("st_r14", -20, 0),   # displaced stock instructions
+        ("pop", RP), ("ret",),
+        "fmt", ("bytes", b"H%d/%d A%d B%d E%d\0" if cond else b"H%d/%d M%d A%d B%d\0"),
+    ]
+
 def ae_debug_patches(cond=False):
-    code, L = assemble(CB_SRC if cond else AED_SRC, AED_BASE)
+    code, L = assemble((CB_SRC if cond else AED_SRC) + _vs_src(cond), AED_BASE)
     assert AED_BASE + len(code) <= CAVE_HI, "ae-debug code overflows the cave"
     ldi = lambda lab: assemble([("ldi32", L[lab], 12)], 0)[0].hex()
     what = "zone stats, conditional bias, shot latch, version-line printer" if cond else \
            "AE zone stats, shot latch, version-line printer"
-    line = "S H/warm A B E<bias>" if cond else "S<shots> H<hot>/<warm> M<max> A<mean> B<Bv*10>"
+    line = "H<hot>/<warm> A<mean> B<Bv*10> E<bias>" if cond else "H<hot>/<warm> M<max> A<mean> B<Bv*10>"
     out = [
         ("aed-cave", AED_BASE, None, code.hex(),
          f"cave: {what} ({len(code)} B, ends {AED_BASE + len(code):#x})"),
@@ -610,8 +608,8 @@ def ae_debug_patches(cond=False):
          "metering 0x385d10 after zone loop 1: call zone stats (redoes the 2 displaced instructions)"),
         ("aed-latch", 0x25aa00, "9f8c00203e66", ldi("lt"),
          "Still Action Start: no-op debug print -> latch zone stats + Bv"),
-        ("aed-version", 0x2c7268, "9f8c0021362a971c", ldi("vs") + "970c",
-         f"version screen: print {line} instead of the version"),
+        ("aed-version", 0x2c72ce, "ce409780a6e03fb0", ldi("vs") + "971c",
+         f"version screen: after the version line, draw a 2nd line {line} at y 114"),
     ]
     if cond:
         call = ldi("cb") + "971ce009"       # call cave ; bra <function epilogue>

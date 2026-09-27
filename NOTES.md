@@ -368,6 +368,11 @@ Readouts vs the X3F previews (clipped = max channel >= 250; blown zones = zones 
 - The stills clip at about 1/2 of the zone cap (counts >= 1/2 cap track the blown zones: 29 vs 45, 52 vs 59, and 0 on the unblown wall). 7/8 counted nothing until +3 EV. So hot = 1/2 cap, warm = 1/4 cap (readout only).
 - Rebuilt: SHA-256 `36882094c052b8c19316a091236a7ed8399287b319aad812edf5ccca0b914952`. Only the six threshold immediates changed (hot `0x1d880`/`0x17706`/`0x14e1c` at 0/-1/3/-0.5 EV applied, warm `0xec40`/`0xbb83`/`0xa70e`).
 
+### 9.21 Readout on its own line (2026-09-27)
+- The version line is stock again (with `--shutter-count`: `Ver... Shots:n`). The readout is a 2nd line at y 114, in the free slot between the version line (rect `0x460b98` = 0,94,314,20) and the hint lines at y 134/154 (rect `0x460b90`: "<icon> : Jump to" / "Firmware update proceeding").
+- Hook `0x2c72ce` (right after the version line's `0x2d303a(rect, text, 2, 0)`): call `vs`, which formats `H<hot>/<warm> A<mean> B<Bv*10> E<bias>` into the same 32-byte buffer, draws it with an 8-byte rect on its own stack area, and redoes the displaced `r0 = r14-0x1c; st r0,@(r14,-20)`.
+- Build: SHA-256 `e582d6627183750b9f0cac2fb9053b59994ed78ff03044ea369dbaeba2b0a527`. Cave `0x27f6b4`-`0x27f88d` (473 B); free `0x27f88e`-`0x27f8e3` (86 B).
+
 ## 10. Resume here (session ended 2026-09-26)
 
 **`main` has everything (merged from `experimental-affb`, 2026-09-26).** Public downloads:
