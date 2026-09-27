@@ -513,17 +513,21 @@ AED_SRC = [
 # through the darker live view). Hysteresis: -0.5 holds while H >= 23, -1/3 while H >= 6. The level is kept as its
 # display value (0, 3, 5 = -0.x EV) in the low half of LIVE1; LIVE1 = mean>>10 <<16 | level (no max). See NOTES.md 9.19.
 CB_UP = (8, 26); CB_HOLD = (6, 23)
+# Hot/warm as fractions of the zone cap. Calibrated 2026-09-27 (NOTES.md 9.20): the stills clip at about half the
+# cap (white screen at +2 EV: 18-23% of pixels clipped, 45-59 mostly-blown zones, zones >= 1/2 cap: 29-52; a wall at
+# +2 EV not blown, 0 zones >= 1/2 cap). 7/8 counted nothing until +3 EV.
+CB_HOT, CB_WARM = 1/2, 1/4
 def _thr(frac, ev): return round(AED_CAP * frac * 2 ** -ev)
 
 CB_SRC = [
     "zs",
     ("ld_r14", -16, 8),
-    ("ldi20", _thr(7/8, 0), 9), ("ldi20", _thr(1/2, 0), 0),         # thresholds for the bias being applied
+    ("ldi20", _thr(CB_HOT, 0), 9), ("ldi20", _thr(CB_WARM, 0), 0),         # thresholds for the bias being applied
     ("ldi32", 0x6a019628, 12), ("ld", 12, 1), ("cmpi", 2, 1), ("beq", "zs_go"),    # Spot: never biased
     ("ldi32", AED_LIVE1 + 2, 12), ("lduh", 12, 1),
-    ("cmpi", 3, 1), ("bne", "zs_t5"), ("ldi20", _thr(7/8, 1/3), 9), ("ldi20", _thr(1/2, 1/3), 0), ("bra", "zs_go"),
+    ("cmpi", 3, 1), ("bne", "zs_t5"), ("ldi20", _thr(CB_HOT, 1/3), 9), ("ldi20", _thr(CB_WARM, 1/3), 0), ("bra", "zs_go"),
     "zs_t5",
-    ("cmpi", 5, 1), ("bne", "zs_go"), ("ldi20", _thr(7/8, 1/2), 9), ("ldi20", _thr(1/2, 1/2), 0),
+    ("cmpi", 5, 1), ("bne", "zs_go"), ("ldi20", _thr(CB_HOT, 1/2), 9), ("ldi20", _thr(CB_WARM, 1/2), 0),
     "zs_go",
     ("ldi8", 16, 7), ("ldi8", 0, 4), ("ldi8", 0, 2), ("ldi8", 0, 6),                 # rows, hot, warm, sum
     "zs_row",

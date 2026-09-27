@@ -353,6 +353,21 @@ SHA-256 `099512246aef6734a58e877b069a98657508841bf91acea16fef9056583d3361`. Repl
 - Readout: `S<shots> H<hot>/<warm> A<mean> B<Bv*10> E<bias>`, E = 0, 3 (-1/3 EV) or 5 (-0.5 EV) at the shot. H is the unbiased-equivalent count the decision used.
 - Cave: `0x27f6b4`-`0x27f871` (445 B); free `0x27f872`-`0x27f8e3` (114 B).
 
+### 9.20 Hot-zone calibration (2026-09-27, white-screen and wall tests)
+Readouts vs the X3F previews (clipped = max channel >= 250; blown zones = zones of a 16x16 grid with >= half their pixels clipped). Build 9.19, hot = 7/8 cap, warm = 1/2 cap:
+
+| File | Scene | Readout | Clipped | Blown zones |
+|---|---|---|---|---|
+| SDIM4075 | wall, A +2 EV | H0/0 A96 B25 E0 | 0% | 0 |
+| SDIM4076 | white screen, A +2 EV | H0/29 A87 B43 E0 | 18% | 45 |
+| SDIM4077 | screen at max, A +2 EV | H0/52 A91 B54 E0 | 23% | 59 |
+| SDIM4078 | screen at max, A +3 EV | H63/183 A123 B48 E5 | 39% | 100 |
+| SDIM4062-4073 | TV room at night, 0 EV | H0-1 | 0-2% | 0-4 |
+
+- Live-view zones scale with exposure (A about 24 at 0 EV, 96 at +2) and follow EV comp in A mode. In M mode they don't follow the manual setting (SDIM4074).
+- The stills clip at about 1/2 of the zone cap (counts >= 1/2 cap track the blown zones: 29 vs 45, 52 vs 59, and 0 on the unblown wall). 7/8 counted nothing until +3 EV. So hot = 1/2 cap, warm = 1/4 cap (readout only).
+- Rebuilt: SHA-256 `36882094c052b8c19316a091236a7ed8399287b319aad812edf5ccca0b914952`. Only the six threshold immediates changed (hot `0x1d880`/`0x17706`/`0x14e1c` at 0/-1/3/-0.5 EV applied, warm `0xec40`/`0xbb83`/`0xa70e`).
+
 ## 10. Resume here (session ended 2026-09-26)
 
 **`main` has everything (merged from `experimental-affb`, 2026-09-26).** Public downloads:
