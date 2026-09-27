@@ -41,11 +41,30 @@ better focusing in dim light and a few other improvements (see [What changes](#w
 
 - **Shot counter.** The version screen in the setup menu shows how many pictures the camera
   has taken (**Shots: n**) instead of the serial number.
+- **Exposure readout (for testing).** Below the version line, the version screen also shows
+  what the camera measured for the **last picture**, for example `H29/52 A91 B54 E5`:
+  - **H**: how many of the 256 metering zones were bright enough to blow out (then a count
+    of zones that were close to it).
+  - **A**: the average brightness.
+  - **B**: the scene brightness × 10.
+  - **E**: the highlight protection used: 0 = none, 3 = 1/3 stop darker, 5 = 1/2 stop darker.
+
+  Take one picture after switching on before reading it.
 - **ISO choices: Auto, 50, 100, 200.** The higher settings are removed from the menus,
   leaving the ones that give the cleanest pictures.
-- **Evaluative metering 1/2 stop darker.** In Evaluative metering, pictures come out
-  1/2 stop darker to protect highlights. Your EV compensation still works on top, and the
-  screen still shows 0. The other metering modes are unchanged.
+- **Automatic highlight protection (experimental).** In Evaluative and Center-Weighted
+  metering, the camera checks how much of the picture is about to blow out, such as sunlit
+  walls or a bright background behind someone in shade:
+
+  | Part of the picture about to blow out | Picture made |
+  |---|---|
+  | less than about 3% | as normal |
+  | about 3–10% | 1/3 stop darker |
+  | more than about 10% | 1/2 stop darker |
+
+  Evenly lit scenes, such as overcast days, come out as normal. Your EV compensation still
+  works on top, and the screen still shows the EV you set. Spot metering is unchanged. The
+  live view already shows the darker picture before you press the shutter.
 - **5 focus points on the rule of thirds.** Instead of 9 points, there's the centre plus the
   four rule-of-thirds points, all the normal box size. From the centre, ▲ goes to top-left,
   ▶ top-right, ▼ bottom-right and ◀ bottom-left. Between the corners, ◀ ▶ switch left/right
@@ -137,4 +156,4 @@ install it the same way. The camera will then behave exactly as it did before.
 
 ---
 
-<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). Both downloads are built from Sigma's `dp2x102.bin` with `tools/patch_lens.py`: the main one with `--af-refine 8 --shutter-count --iso-max-200 --eval-bias -0.5 --af-5 --af-fallback`, the lens + shot counter one with `--shutter-count`.</sub>
+<sub>For developers: technical notes are in [`NOTES.md`](NOTES.md) and the patch tools are in [`tools/`](tools/). Both downloads are built from Sigma's `dp2x102.bin` with `tools/patch_lens.py`: the main one with `--af-refine 8 --shutter-count --iso-max-200 --af-5 --af-fallback --cond-bias`, the lens + shot counter one with `--shutter-count`.</sub>
