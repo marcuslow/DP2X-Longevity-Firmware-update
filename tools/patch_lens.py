@@ -2,7 +2,7 @@
 """Patch Sigma DP2x firmware 1.02 so the lens barrel is not retracted at power-off
 and is not re-homed (retract + extend) at power-on when it is already out.
 
-Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5] [--af-fallback]
+Usage: patch_lens.py IN.bin OUT.bin [--also-playback] [--af-refine N] [--shutter-count] [--iso-max-200] [--eval-bias EV] [--af-25 | --af-5] [--af-fallback] [--ae-debug]
 See NOTES.md for the analysis behind each patch.
 """
 import argparse, hashlib, struct, sys
@@ -448,6 +448,80 @@ def affb_patches():
          "AF end: on coarse-scan failure, final move goes to the highest-contrast position seen"),
     ]
 
+# AE debug readout: the version line shows the last shot's AE zone statistics instead of the version.
+# Per live-view frame, after the metering function 0x385d10 has corrected its 16x16 zones (loop 1, zone buffer
+# ptr @(r14,-16), row stride 0x100, zones clamped to 0x3b100), count hot (>= 7/8 cap) and warm (>= 1/2 cap)
+# zones, and keep the max and the mean. "Still Action Start" (0x25a9f4) latches them with the last metered Bv
+# (0x6a019644, 16.16 APEX). RAM: the factory alternate AFE table 0x6a018d6c (24 B), read only when the service
+# flag 0x6a01b3f0 is set, which only the dead service block can do. See NOTES.md 9.17.
+AED_BASE = 0x27f6b4           # free cave tail after the neutralised 0x27f6b2 (560 B)
+AED_LIVE0, AED_LIVE1 = 0x6a018d6c, 0x6a018d70     # hot | warm<<16, max>>10 | mean>>10 <<16
+AED_LAT0, AED_LAT1, AED_LATBV = 0x6a018d74, 0x6a018d78, 0x6a018d7c
+AED_CAP = 0x3b100
+
+AED_SRC = [
+    "zs",                                                           # called from 0x385f8a (end of zone loop 1)
+    ("ld_r14", -16, 8),
+    ("ldi8", 16, 7), ("ldi8", 0, 4), ("ldi8", 0, 2), ("ldi8", 0, 5), ("ldi8", 0, 6),   # rows, hot, warm, max, sum
+    ("ldi20", AED_CAP * 7 // 8, 9), ("ldi20", AED_CAP // 2, 0),
+    "zs_row",
+    ("ldi8", 0, 13),
+    "zs_col",
+    ("ld_r13", 8, 1), ("add", 1, 6),                                # r1 = zone, sum += zone
+    ("cmp", 5, 1), ("bls", "zs_nomax"), ("mov", 1, 5),
+    "zs_nomax",
+    ("cmp", 0, 1), ("bc", "zs_next"), ("addi", 1, 2),               # warm
+    ("cmp", 9, 1), ("bc", "zs_next"), ("addi", 1, 4),               # hot
+    "zs_next",
+    ("addi", 4, 13), ("ldi8", 0x40, 12), ("cmp", 12, 13), ("blt", "zs_col"),
+    ("ldi20", 0x100, 12), ("add", 12, 8),
+    ("addi", -1, 7), ("cmpi", 0, 7), ("bne", "zs_row"),
+    ("mov", 2, 1), ("raw", "b501"), ("or", 4, 1),                  # lsl2 0,r1 (<<16)
+    ("ldi32", AED_LIVE0, 12), ("st", 1, 12),
+    ("lsr", 10, 5), ("raw", "b126"), ("raw", "b506"), ("or", 5, 6),  # (sum>>18)<<16 | max>>10
+    ("ldi32", AED_LIVE1, 12), ("st", 6, 12),
+    ("ld_r14", -24, 0), ("ldi32", 0x6a010644, 9), ("ret",),         # displaced stock instructions
+
+    "lt",                                                           # replaces the no-op debug print at shot start
+    ("ldi32", AED_LIVE0, 13), ("ld", 13, 0), ("ldi32", AED_LAT0, 12), ("st", 0, 12),
+    ("ldi32", AED_LIVE1, 13), ("ld", 13, 0), ("ldi32", AED_LAT1, 12), ("st", 0, 12),
+    ("ldi32", 0x6a019644, 13), ("ld", 13, 0), ("ldi32", AED_LATBV, 12), ("st", 0, 12),
+    ("ret",),
+
+    "vs",                                                           # jumped to from the version screen 0x2c7268
+    ("raw", "a3fc"),                                                # addsp -16: own outgoing args
+    ("ldi32", AED_LAT0, 12), ("ld", 12, 0),
+    ("mov", 0, 1), ("raw", "b101"), ("raw", "1301"),                # warm -> (r15,0)
+    ("mov", 0, 7), ("raw", "97b7"),                                 # hot -> r7 (extuh)
+    ("ldi32", AED_LAT1, 12), ("ld", 12, 0),
+    ("mov", 0, 1), ("raw", "97b1"), ("raw", "1311"),                # max -> (r15,4)
+    ("raw", "b100"), ("raw", "1320"),                               # mean -> (r15,8)
+    ("ldi32", AED_LATBV, 12), ("ld", 12, 0),
+    ("mov", 0, 1), ("lsl", 2, 1), ("add", 0, 1), ("lsl", 1, 1), ("raw", "b901"), ("raw", "1331"),  # Bv*10 -> (r15,12)
+    ("ldi32", 0x80101ff4, 12), ("ld", 12, 6),                       # shots -> r6
+    ("ldi8", 0xbc, 4), ("extsb", 4), ("add", 14, 4),                # r4 = line buffer (r14-0x44, 32 B)
+    ("ldi32", "fmt", 5),
+    ("ldi32", 0x3757b2, 12), ("call_r", 12),                        # sprintf
+    ("raw", "a304"),                                                # addsp 16
+    ("ldi32", 0x2c72b6, 12), ("jmp_r", 12),
+    "fmt", ("bytes", b"S%d H%d/%d M%d A%d B%d\0"),
+]
+
+def ae_debug_patches():
+    code, L = assemble(AED_SRC, AED_BASE)
+    assert AED_BASE + len(code) <= CAVE_HI, "ae-debug code overflows the cave"
+    ldi = lambda lab: assemble([("ldi32", L[lab], 12)], 0)[0].hex()
+    return [
+        ("aed-cave", AED_BASE, None, code.hex(),
+         f"cave: AE zone stats, shot latch, version-line printer ({len(code)} B, ends {AED_BASE + len(code):#x})"),
+        ("aed-zones", 0x385f8a, "2fa09f896a010644", ldi("zs") + "971c",
+         "metering 0x385d10 after zone loop 1: call zone stats (redoes the 2 displaced instructions)"),
+        ("aed-latch", 0x25aa00, "9f8c00203e66", ldi("lt"),
+         "Still Action Start: no-op debug print -> latch zone stats + Bv"),
+        ("aed-version", 0x2c7268, "9f8c0021362a971c", ldi("vs") + "970c",
+         "version screen: print S<shots> H<hot>/<warm> M<max> A<mean> B<Bv*10> instead of the version"),
+    ]
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inp"); ap.add_argument("out")
@@ -467,6 +541,8 @@ def main():
                     help="AF-point grid mode: 5 points (centre + rule-of-thirds), stock size; DISPLAY jumps to the centre")
     ap.add_argument("--af-fallback", action="store_true",
                     help="when AF fails, move the lens to the sharpest position seen during the scan (box stays red)")
+    ap.add_argument("--ae-debug", action="store_true",
+                    help="DEBUG: version line shows the last shot's AE zone stats and Bv instead of the version")
     a = ap.parse_args()
     if a.af_25 and a.af_5:
         sys.exit("--af-25 and --af-5 are alternatives (same cave space)")
@@ -491,7 +567,9 @@ def main():
         todo += af5_patches()
     if a.af_fallback:
         todo += affb_patches()
-    if a.eval_bias or a.af_25 or a.af_5 or a.af_fallback:
+    if a.ae_debug:
+        todo += ae_debug_patches()
+    if a.eval_bias or a.af_25 or a.af_5 or a.af_fallback or a.ae_debug:
         o = off(CAVE_LO)
         if hashlib.sha256(d[o:off(CAVE_HI)]).hexdigest() != CAVE_STOCK_SHA:
             sys.exit("code cave 0x27ea2e-0x27f8e3 is not stock")
