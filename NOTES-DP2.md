@@ -405,3 +405,17 @@ below, six `ldi:32` immediates, and the checksum. The setter `0x280acc` is untou
 **Next: step 5.** No FR emulator is saved in the repo (the one used for the DP2x fallback check was a throwaway).
 Write `tools/fremu.py`. Run the DP2x original and the port on the same synthetic contrast curves, and compare the
 lens-move sequence.
+
+**Recovery path (SETUP dial), checked 2026-09-27:**
+- Task 6 is started only by `sta_tsk(6)` in `0x37a40c`. Its one caller is `0x3854d4`, reached only from
+  `0x385988` "Init_Preview Start" (live-view init).
+- `0x385988` is in turn called only by the six "Image >> idle mode start" handlers (the table at `0x3a3698`).
+- SETUP has no live view (the lens is retracted), so the new task code shouldn't run there. That also covers the
+  way to the firmware updater.
+- If a shooting mode crashes: power off, set the dial to SETUP, power on, reflash stock.
+- The only hook live in SETUP is `motor_done` (any focus move). Its ported step chain `0x38a594` does something only
+  when engine state `0x80150fac` is exactly 1.
+- Boot zero-fills `0x80101010`-`0x8019de03` (`0x20308c`), which contains the new RAM, so the state is 0 there.
+- Once started, task 6 keeps running when leaving live view (the old body exited on the flag-1 stop bit). This is
+  the same as the DP2x; later `sta_tsk(6)` calls fail harmlessly.
+- This is inferred from the code, not observed: the first test after flashing is the SETUP menu itself.
