@@ -97,7 +97,7 @@ DP2x firmware **version 1.02**.
    **Only want the lens change and the shot counter?** Download this one instead:
    [**DP2X102.BIN** (lens + shot counter)](https://github.com/marcuslow/DP2X-Longevity-Firmware-update/raw/main/build/lens/DP2X102.BIN).
    It keeps everything else exactly as Sigma made it: all ISO settings, 9 focus points and
-   normal metering. You also don't need to change the ISO before installing it.
+   normal metering. 
 2. **Fully charge** the camera battery.
 3. **Format** your SD card in the camera. This erases the card, so save your pictures first.
 4. Put the card in your computer and copy **DP2X102.BIN** onto it. Put it on the
